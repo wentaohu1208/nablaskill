@@ -146,7 +146,7 @@ def main() -> None:
                         help="DTO gradient steps per outer round")
     parser.add_argument("--max_outer_rounds", type=int, default=4,
                         help="Iterative rounds (1=single-round baseline)")
-    parser.add_argument("--lr", type=float, default=0.01)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--query", type=str, default=None)
     parser.add_argument("--skill", type=str, default=None)
@@ -172,7 +172,7 @@ def main() -> None:
         max_outer_rounds=args.max_outer_rounds,
         learning_rate=args.lr,
         response_nll_coeff=1e-3,
-        skill_fluency_coeff=1e-3,
+        skill_fluency_coeff=0.1,
         reward_coeff=1.0 if rm_model else 0.0,
         mixed_precision=torch.float32 if args.fp32 else torch.bfloat16,
         grad_caching=True,
