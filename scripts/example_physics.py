@@ -144,9 +144,9 @@ def main() -> None:
     parser.add_argument("--fp32", action="store_true", help="Use float32")
     parser.add_argument("--max_iters", type=int, default=100,
                         help="DTO gradient steps per outer round")
-    parser.add_argument("--max_outer_rounds", type=int, default=4,
+    parser.add_argument("--max_outer_rounds", type=int, default=3,
                         help="Iterative rounds (1=single-round baseline)")
-    parser.add_argument("--lr", type=float, default=0.01)
+    parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--query", type=str, default=None)
     parser.add_argument("--skill", type=str, default=None)
