@@ -138,7 +138,7 @@ class SkillTrainer:
             device=self.device, dtype=torch.float32,
         )
         init_logits.scatter_(
-            2, skill_token_ids.unsqueeze(-1), 1.0  # moderate init scale
+            2, skill_token_ids.unsqueeze(-1), 1  # moderate init scale
         )
 
         # Tokenize response for the LM template

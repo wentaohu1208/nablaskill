@@ -64,6 +64,22 @@ substituting numbers. Check dimensional consistency.
 7. **Verify**: Sanity-check the answer (correct units, reasonable \
 magnitude, limiting cases).\
 """
+MATH_SKILL = """\
+# Mathematical Problem-Solving Skill
+
+## Goal
+Solve mathematical problems systematically using algebraic reasoning and logical steps.
+
+## Workflow
+1. **Understand the problem**: Carefully read the question and determine what quantity needs to be found.
+2. **List known quantities**: Extract all given numbers, variables, equations, or constraints from the problem.
+3. **Define variables**: Introduce symbols for unknown quantities if they are not already defined.
+4. **Formulate equations**: Translate the relationships in the problem into mathematical equations or expressions.
+5. **Apply mathematical rules**: Use algebraic manipulation, arithmetic operations, identities, or known formulas to simplify the equations.
+6. **Solve step-by-step**: Isolate the unknown variable and compute the solution systematically.
+7. **Verify the solution**: Check the result by substituting it back into the original equation or by evaluating whether it satisfies the conditions of the problem.\
+"""
+
 
 PHYSICS_QUERY = (
     "A 2 kg block slides down a frictionless inclined plane that makes "
@@ -126,9 +142,9 @@ def main() -> None:
     parser.add_argument("--rm", type=str, default='/data/hwt/hf_ckpt/Skywork-Reward-V2-Qwen3-4B')
     parser.add_argument("--device", type=str, default='cuda:6')
     parser.add_argument("--fp32", action="store_true", help="Use float32")
-    parser.add_argument("--max_iters", type=int, default=100,
+    parser.add_argument("--max_iters", type=int, default=80,
                         help="DTO gradient steps per outer round")
-    parser.add_argument("--max_outer_rounds", type=int, default=20,
+    parser.add_argument("--max_outer_rounds", type=int, default=2,
                         help="Iterative rounds (1=single-round baseline)")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
@@ -180,7 +196,9 @@ def main() -> None:
 
     # Run optimization
     query = args.query or PHYSICS_QUERY
-    skill = args.skill or PHYSICS_SKILL
+    # skill = args.skill or PHYSICS_SKILL
+    skill = args.skill or MATH_SKILL
+    
 
     logger.info("=" * 60)
     logger.info("Query: %s", query)
