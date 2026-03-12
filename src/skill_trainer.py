@@ -62,7 +62,7 @@ class SkillTrainer:
         warmup_iters_ratio: float = 0.0,
         reward_coeff: float = 0.1,
         response_nll_coeff: float = 1e-3,
-        skill_fluency_coeff: float = 1e-4,
+        skill_fluency_coeff: float = 1e-3,
         lr_scheduler_type: str = "cosine",
         device: Optional[torch.device] = None,
         mixed_precision: torch.dtype = torch.bfloat16,

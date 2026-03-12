@@ -142,9 +142,9 @@ def main() -> None:
     parser.add_argument("--rm", type=str, default='/data/hwt/hf_ckpt/Skywork-Reward-V2-Qwen3-4B')
     parser.add_argument("--device", type=str, default='cuda:6')
     parser.add_argument("--fp32", action="store_true", help="Use float32")
-    parser.add_argument("--max_iters", type=int, default=80,
+    parser.add_argument("--max_iters", type=int, default=100,
                         help="DTO gradient steps per outer round")
-    parser.add_argument("--max_outer_rounds", type=int, default=2,
+    parser.add_argument("--max_outer_rounds", type=int, default=40,
                         help="Iterative rounds (1=single-round baseline)")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
@@ -251,16 +251,16 @@ def main() -> None:
     print(f"  LLM Calls:     {ttso.num_llm_calls}")
     print(f"  Grad Steps:    {ttso.num_grad_steps}")
 
-    # Show per-round reward trajectory
+    # Show per-round skill and reward
     if ttso.round_history:
-        print(f"\n{'='*60}")
-        print("ROUND HISTORY:")
-        print(f"{'='*60}")
         for entry in ttso.round_history:
             rnd = entry["round"]
             reward = entry["reward"]
-            skill_preview = entry["skill"][:60].replace("\n", " ")
-            print(f"  Round {rnd}: RM={reward:.4f} | skill: {skill_preview}...")
+            skill_text = entry["skill"]
+            print(f"\n{'='*60}")
+            print(f"ROUND {rnd} | RM={reward:.4f}")
+            print(f"{'='*60}")
+            print(skill_text)
     print(f"{'='*60}")
     import pdb; pdb.set_trace()
 
