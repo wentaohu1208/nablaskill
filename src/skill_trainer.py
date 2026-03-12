@@ -67,6 +67,7 @@ class SkillTrainer:
         device: Optional[torch.device] = None,
         mixed_precision: torch.dtype = torch.bfloat16,
         grad_caching: bool = True,
+        cache_refresh_interval: int = 1,
         show_train_pbar: bool = False,
         show_train_logs: bool = False,
     ):
@@ -89,6 +90,7 @@ class SkillTrainer:
         self.device = device or utils.infer_device_from_model(self.lm_model)
 
         self.grad_caching = grad_caching
+        self.cache_refresh_interval = cache_refresh_interval
         self.show_train_pbar = show_train_pbar
         self.show_train_logs = show_train_logs
 
@@ -136,7 +138,7 @@ class SkillTrainer:
             device=self.device, dtype=torch.float32,
         )
         init_logits.scatter_(
-            2, skill_token_ids.unsqueeze(-1), 10.0  # high confidence init
+            2, skill_token_ids.unsqueeze(-1), 1.0  # moderate init scale
         )
 
         # Tokenize response for the LM template
@@ -192,7 +194,17 @@ class SkillTrainer:
 
         for it in train_iter:
             optimizer.zero_grad()
-            skip_grad = self.grad_caching and (cached_grad is not None)
+            # Force full forward every cache_refresh_interval steps
+            force_refresh = (
+                self.grad_caching
+                and self.cache_refresh_interval > 0
+                and it % self.cache_refresh_interval == 0
+            )
+            skip_grad = (
+                self.grad_caching
+                and cached_grad is not None
+                and not force_refresh
+            )
 
             device_type = "cuda" if str(self.device).startswith("cuda") else "cpu"
             with torch.autocast(device_type, dtype=self.mixed_precision):

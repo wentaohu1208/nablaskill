@@ -60,6 +60,7 @@ class TTSOConfig:
     skill_fluency_coeff: float = 1e-4
     mixed_precision: torch.dtype = torch.bfloat16
     grad_caching: bool = True
+    cache_refresh_interval: int = 10  # force full forward every N steps
 
     # Selection criteria
     min_reward_threshold: Optional[float] = None
@@ -141,6 +142,7 @@ class TTSODecoding:
             skill_fluency_coeff=self.cfg.skill_fluency_coeff,
             mixed_precision=self.cfg.mixed_precision,
             grad_caching=self.cfg.grad_caching,
+            cache_refresh_interval=self.cfg.cache_refresh_interval,
             show_train_pbar=(self.cfg.verbose >= 3),
             show_train_logs=(self.cfg.verbose >= 4),
             device=self.device,

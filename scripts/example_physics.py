@@ -122,13 +122,13 @@ def load_models(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="TTSO Physics Skill Example")
-    parser.add_argument("--lm", type=str, default="sshleifer/tiny-gpt2")
-    parser.add_argument("--rm", type=str, default=None)
-    parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--lm", type=str, default="/data/hwt/hf_ckpt/Qwen2.5-7B-Instruct")
+    parser.add_argument("--rm", type=str, default='/data/hwt/hf_ckpt/Skywork-Reward-V2-Qwen3-4B')
+    parser.add_argument("--device", type=str, default='cuda:6')
     parser.add_argument("--fp32", action="store_true", help="Use float32")
-    parser.add_argument("--max_iters", type=int, default=10,
+    parser.add_argument("--max_iters", type=int, default=100,
                         help="DTO gradient steps per outer round")
-    parser.add_argument("--max_outer_rounds", type=int, default=3,
+    parser.add_argument("--max_outer_rounds", type=int, default=20,
                         help="Iterative rounds (1=single-round baseline)")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
@@ -176,6 +176,7 @@ def main() -> None:
         config=pipeline_config,
         device=device,
     )
+    # import pdb; pdb.set_trace()
 
     # Run optimization
     query = args.query or PHYSICS_QUERY
@@ -195,6 +196,7 @@ def main() -> None:
 
     # Display results
     ttso = result.ttso_result
+    # import pdb; pdb.set_trace()
     if ttso is None:
         logger.error("TTSO optimization failed - no result.")
         return
@@ -202,22 +204,22 @@ def main() -> None:
     print(f"\n{'='*60}")
     print("ORIGINAL SKILL:")
     print(f"{'='*60}")
-    print(ttso.original_skill[:500])
+    print(ttso.original_skill)
 
     print(f"\n{'='*60}")
     print("OPTIMIZED SKILL (decoded from logits):")
     print(f"{'='*60}")
-    print(ttso.optimized_skill[:500])
+    print(ttso.optimized_skill)
 
     print(f"\n{'='*60}")
     print("ORIGINAL RESPONSE:")
     print(f"{'='*60}")
-    print(ttso.original_response[:500])
+    print(ttso.original_response)
 
     print(f"\n{'='*60}")
     print("FINAL RESPONSE:")
     print(f"{'='*60}")
-    print(ttso.final_response[:500])
+    print(ttso.final_response)
 
     print(f"\n{'='*60}")
     print("STATS:")
@@ -242,7 +244,7 @@ def main() -> None:
             skill_preview = entry["skill"][:60].replace("\n", " ")
             print(f"  Round {rnd}: RM={reward:.4f} | skill: {skill_preview}...")
     print(f"{'='*60}")
-
+    import pdb; pdb.set_trace()
 
 if __name__ == "__main__":
     main()
