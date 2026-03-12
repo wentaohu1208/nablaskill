@@ -1,0 +1,259 @@
+研究计划：基于 Test-Time Optimization 的 Skill 自适应优化
+
+1. 研究背景
+
+近年来，基于 Skill Library（技能库）的 LLM Agent 系统逐渐成为重要研究方向。例如 AutoSkill 这类系统会将可复用能力表示为结构化的 Skill Artifact（如 SKILL.md），并存储在 SkillBank 中，通过检索机制在推理时调用。
+
+典型流程如下：
+
+User Query
+    ↓
+Skill Retrieval （参考/Users/wentaohu/project/AutoSkill）
+    ↓
+Prompt Construction
+    ↓
+LLM Generation
+
+即：
+
+用户问题 → 检索相关 Skill → 将 Skill 作为 Prompt Context → 生成答案
+
+然而，目前大多数 Skill 系统存在一个核心问题：
+
+Skill 是静态的。
+
+- Skill 通常以文本 prompt 形式存储
+- 检索到的 skill 直接使用
+- 没有机制可以根据当前任务动态调整 skill
+
+另一方面，近期工作 Nabla-Reasoner 提出了一种重要思想：
+
+Test-Time Optimization (TTO)
+
+即在推理阶段对模型内部变量进行优化，以提升当前任务表现。
+
+这启发了一个新的研究方向：
+
+是否可以在推理阶段优化 Skill 本身？
+
+
+2. 问题定义
+
+当前 Skill-based Agent 系统存在三个主要限制：
+
+2.1 Skill 跨任务迁移能力弱
+
+大多数 Skill 是领域绑定的。
+
+例如：
+
+物理 Skill：
+
+1. Identify forces
+2. Apply conservation laws
+3. Solve equations
+
+而数学问题：
+
+Solve algebra or geometry problems
+
+当前系统如果检索到 physics skill：
+
+- 可能无法直接应用
+- 或者效果较差
+
+系统缺乏机制：
+
+让 skill 在不同任务之间进行适应性迁移。
+
+
+2.2 Skill 是静态文本
+
+当前 Skill 通常形式如下：
+
+Skill: Solve multi-step physics problems
+1. Identify variables
+2. Apply relevant formulas
+3. Solve algebraically
+
+这些 Skill：
+
+- 无法动态调整
+- 无法根据任务修改
+- 无法进行在线优化
+
+
+2.3 Skill 使用过程中缺乏反馈机制
+
+目前 Skill 使用流程为：
+
+retrieve → apply → generate
+
+但缺少以下循环：
+
+retrieve → apply → evaluate → refine skill
+
+也就是说：
+
+Skill 不会在使用过程中进化。
+
+
+3. 核心思想
+
+我们提出：
+
+Test-Time Skill Optimization (TTSO)
+
+核心思想：
+
+将 Skill 从静态 prompt 转变为可优化变量。
+
+即：
+
+Skill = optimizable variable
+
+而不是：
+
+Skill = fixed instruction
+
+在推理过程中：
+
+- Skill 可以被调整
+- Skill 可以强化
+- Skill 可以适配当前任务
+
+
+4. 方法框架
+
+整体 Pipeline 如下：
+
+Step 1：Skill Retrieval
+
+用户输入 query：
+
+User Query
+    ↓
+Skill Retriever
+    ↓
+Top-k Skills
+
+例如检索到：
+
+Skill A：multi-step reasoning
+Skill B：equation solving
+Skill C：identify constraints
+
+这些 Skill 将被插入 prompt：
+
+[Skill Context]
+
+User Query
+
+
+Step 2：初始生成
+
+模型生成第一版答案：
+
+Query + Skills
+      ↓
+Initial Reasoning
+
+
+Step 3：Test-Time Skill Optimization
+
+可以参考/Users/wentaohu/project/Nabla-Reasoner
+
+
+Initial Output
+      ↓
+Evaluation
+      ↓
+Skill Update
+      ↓
+Re-generation
+
+
+
+5. Skill 的优化方式
+
+可以参考/Users/wentaohu/project/Nabla-Reasoner
+
+
+
+5.3 Skill Optimization
+
+可以参考/Users/wentaohu/project/Nabla-Reasoner
+
+
+6. Skill 跨领域迁移
+
+一个重要假设：
+
+Test-time optimization 可以实现 skill 的跨任务迁移。
+
+例如：
+
+Physics skill：
+
+Identify known quantities
+Apply governing equations
+Solve algebraically
+
+通过优化后可能变成：
+
+Math skill：
+
+Identify variables
+Construct equations
+Solve step-by-step
+
+实现：
+
+Skill Transfer
+
+
+7. 研究问题
+
+本研究主要探索：
+
+RQ1  
+Test-time optimization 是否能提升 skill 在新任务上的效果？
+
+RQ2  
+skill 是否可以通过优化实现跨领域迁移？
+
+RQ3  
+优化 skill 表示是否能提升 reasoning performance？
+
+
+
+我的理解
+
+这个想法本质上是在改变 Skill 的定义。
+
+当前系统：
+
+Skill = static prompt
+
+你的想法：
+
+Skill = dynamic reasoning module
+
+也就是：
+
+Skill 不再只是 instruction，而是可被优化的 reasoning operator。
+
+整体 pipeline 变成：
+
+Skill Retrieval
+        ↓
+Skill Adaptation (Test-Time Optimization)
+        ↓
+Task Solving
+
+换句话说：
+
+模型不仅仅是在使用 Skill，而是在学习如何调整 Skill。
+
+
+请你帮我写plan
