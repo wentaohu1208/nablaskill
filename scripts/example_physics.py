@@ -142,10 +142,10 @@ def main() -> None:
     parser.add_argument("--rm", type=str, default='/data/hwt/hf_ckpt/Skywork-Reward-V2-Qwen3-4B')
     parser.add_argument("--device", type=str, default='cuda:6')
     parser.add_argument("--fp32", action="store_true", help="Use float32")
-    parser.add_argument("--optimization_mode", type=str, default="dto",
+    parser.add_argument("--optimization_mode", type=str, default="soft_prompt",
                         choices=["dto", "soft_prompt", "textgrad"],
                         help="Skill optimization method")
-    parser.add_argument("--max_iters", type=int, default=100,
+    parser.add_argument("--max_iters", type=int, default=20,
                         help="DTO/soft_prompt gradient steps per outer round")
     parser.add_argument("--max_outer_rounds", type=int, default=4,
                         help="Iterative rounds (1=single-round baseline)")
@@ -180,7 +180,7 @@ def main() -> None:
         max_outer_rounds=args.max_outer_rounds,
         learning_rate=args.lr,
         response_nll_coeff=1e-3,
-        skill_fluency_coeff=0,
+        skill_fluency_coeff=0.05,
         reward_coeff=1.0 if rm_model else 0.0,
         mixed_precision=torch.float32 if args.fp32 else torch.bfloat16,
         grad_caching=True,
