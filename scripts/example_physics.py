@@ -144,7 +144,7 @@ def main() -> None:
     parser.add_argument("--fp32", action="store_true", help="Use float32")
     parser.add_argument("--max_iters", type=int, default=100,
                         help="DTO gradient steps per outer round")
-    parser.add_argument("--max_outer_rounds", type=int, default=40,
+    parser.add_argument("--max_outer_rounds", type=int, default=4,
                         help="Iterative rounds (1=single-round baseline)")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
@@ -172,7 +172,7 @@ def main() -> None:
         max_outer_rounds=args.max_outer_rounds,
         learning_rate=args.lr,
         response_nll_coeff=1e-3,
-        skill_fluency_coeff=1e-4,
+        skill_fluency_coeff=1e-3,
         reward_coeff=1.0 if rm_model else 0.0,
         mixed_precision=torch.float32 if args.fp32 else torch.bfloat16,
         grad_caching=True,
@@ -262,7 +262,7 @@ def main() -> None:
             print(f"{'='*60}")
             print(skill_text)
     print(f"{'='*60}")
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
 
 if __name__ == "__main__":
     main()
