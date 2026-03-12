@@ -400,7 +400,7 @@ class TTSODecoding:
                 "reward": new_reward,
             })
 
-            # 4d: Accept or reject this round
+            # 4d: Track best
             if new_reward > best_reward:
                 best_reward = new_reward
                 best_skill = new_skill
@@ -408,10 +408,9 @@ class TTSODecoding:
                 self._log("Round %d ACCEPTED (new best=%.4f)", rnd, best_reward, level=1)
             else:
                 self._log(
-                    "Round %d: no improvement (%.4f <= %.4f), stopping early.",
+                    "Round %d: no improvement (%.4f <= %.4f)",
                     rnd, new_reward, best_reward, level=1,
                 )
-                break
 
             # Update for next round
             current_skill = new_skill
