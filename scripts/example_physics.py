@@ -146,12 +146,6 @@ def main() -> None:
                         choices=["dto", "soft_prompt", "textgrad"],
                         help="Skill optimization method")
     parser.add_argument("--max_iters", type=int, default=100,
-<<<<<<< HEAD
-                        help="DTO gradient steps per outer round")
-    parser.add_argument("--max_outer_rounds", type=int, default=3,
-                        help="Iterative rounds (1=single-round baseline)")
-    parser.add_argument("--lr", type=float, default=0.05)
-=======
                         help="DTO/soft_prompt gradient steps per outer round")
     parser.add_argument("--max_outer_rounds", type=int, default=4,
                         help="Iterative rounds (1=single-round baseline)")
@@ -160,7 +154,6 @@ def main() -> None:
                         help="Soft prompt: embedding drift regularization")
     parser.add_argument("--textgrad_max_rewrites", type=int, default=5,
                         help="TextGrad: max rewrite iterations")
->>>>>>> 64e11a9 (1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--query", type=str, default=None)
     parser.add_argument("--skill", type=str, default=None)
