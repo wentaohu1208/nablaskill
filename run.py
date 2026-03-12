@@ -93,10 +93,17 @@ def main():
     parser.add_argument("--system_prompt", type=str, default=None)
 
     # Optimization
+    parser.add_argument("--optimization_mode", type=str, default="dto",
+                        choices=["dto", "soft_prompt", "textgrad"],
+                        help="Skill optimization method")
     parser.add_argument("--max_iters", type=int, default=20,
-                        help="DTO gradient steps per outer round")
+                        help="DTO/soft_prompt gradient steps per outer round")
     parser.add_argument("--max_outer_rounds", type=int, default=1,
                         help="Iterative rounds (1=single-round, >1=iterative)")
+    parser.add_argument("--embed_drift_coeff", type=float, default=0.01,
+                        help="Soft prompt: embedding drift regularization")
+    parser.add_argument("--textgrad_max_rewrites", type=int, default=5,
+                        help="TextGrad: max rewrite iterations")
     parser.add_argument("--learning_rate", type=float, default=0.01)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--reward_coeff", type=float, default=1.0)
@@ -149,6 +156,7 @@ def main():
 
     # Build config
     config = TTSOConfig(
+        optimization_mode=args.optimization_mode,
         max_iters=args.max_iters,
         max_outer_rounds=args.max_outer_rounds,
         learning_rate=args.learning_rate,
@@ -160,6 +168,8 @@ def main():
         skill_fluency_coeff=args.skill_fluency_coeff,
         mixed_precision=MIXED_PRECISION_MAP[args.mixed_precision],
         grad_caching=not args.no_grad_caching,
+        embed_drift_coeff=args.embed_drift_coeff,
+        textgrad_max_rewrites=args.textgrad_max_rewrites,
         min_reward_threshold=args.min_reward_threshold,
         rejection_sampling=not args.no_rejection_sampling,
         max_generation_len=args.max_generation_len,

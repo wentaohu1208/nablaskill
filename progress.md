@@ -123,6 +123,85 @@
 > - 默认 `max_outer_rounds=3`
 
 ### Next Steps
-1. [ ] 运行 `python scripts/example_physics.py` 验证 end-to-end pipeline
+1. [x] 运行 `python scripts/example_physics.py` 验证 end-to-end pipeline
 2. [ ] Phase 3: Cross-Domain Skill Transfer
 3. [ ] Phase 4: Evaluation & Experiments
+
+---
+
+## Session: 2026-03-12 (Session 5 - DTO 实验 & 方案验证失败)
+
+### 实验过程
+
+1. **初次运行**: init_scale=10, grad_caching=True, max_iters=100
+   - 结果: Grad Steps=1, skill 完全不变
+   - 原因: cache 死锁 (tokens 不变 → cache 不失效 → 永远用旧梯度)
+
+2. **修复 cache 死锁**: 加入 `cache_refresh_interval` 周期性强制 full forward
+   - 仍然不变: init_scale=10 太高, softmax 太尖锐
+
+3. **降低 init_scale=1, fluency=1e-3**:
+   - 结果: tokens 翻转了, 但变成乱码
+   - Round 1: "Carson İnt-S佳 Skill mixin冻"
+   - Round 4: "权重ade greateraultFeedback埴react.js"
+   - RM 持续下降: 22.25 → 20.37
+
+4. **提高 fluency=0.1**:
+   - 结果: tokens 完全不变 (fluency 把 tokens 锁死)
+   - RM 波动 21.87~23.12 纯粹是 response 采样方差
+
+5. **极端测试 fluency=0, init_scale=3**:
+   - 结果: 依然不变
+   - 诊断: grad_max=9e-6, 100步累积 ~9e-6, 远不够翻转 (gap=3.0)
+
+### 根本结论
+
+**Token-level DTO (STE) 用于 Skill 优化根本不可行**:
+- STE 梯度瓶颈: vocab=152K 稀释梯度到 ~1e-6
+- 不存在超参 sweet spot: tokens 要么不变要么乱码
+- 优化目标倒置: 拟合固定 response 而非产出更好 response
+- Token 空间无平滑路径: 一个 token 翻转就破坏语义
+
+### 提出三个替代方案
+
+1. **方案 A: Soft Prompt Optimization** — 直接优化 continuous embeddings, 绕过 STE
+2. **方案 B: TextGrad / LLM Rewriting** — 用梯度/reward 信号指导 LLM 改写 skill
+3. **方案 C: 混合方案** — continuous embedding 优化 + LLM decode
+
+### 待决策
+> ~~选择方案 A/B/C 之一推进实现 (Phase 2.7)~~
+> **决策**: 方案 A (Soft Prompt) 和方案 B (TextGrad) 都实现, 通过 `--optimization_mode` 切换
+
+---
+
+## Session: 2026-03-12 (Session 6 - Phase 2.7 Implementation)
+
+### Completed
+- [x] **方案 A: Soft Prompt Optimization** → `src/soft_prompt_trainer.py`
+  - `SoftPromptEmbedding`: 直接优化 continuous embeddings [1, N, hidden_dim]
+  - 梯度直通无 STE 瓶颈
+  - L2 drift 正则化 (`embed_drift_coeff`) 防止 embedding 偏离太远
+  - cosine similarity nearest neighbor 投影回 tokens
+- [x] **方案 B: TextGrad / LLM Rewriting** → `src/textgrad_trainer.py`
+  - 纯推理方法, num_grad_steps 恒为 0
+  - Feedback 生成 + Skill 改写 + RM 评分 循环
+  - 结构化 prompt 模板保证输出质量
+- [x] **Factory Pattern 路由** → `src/ttso.py:_create_optimizer()`
+  - `TTSOConfig.optimization_mode`: "dto" | "soft_prompt" | "textgrad"
+  - `run()` 和 `run_iterative()` 零改动, 统一接口
+- [x] **CLI 支持** → `run.py` + `scripts/example_physics.py`
+  - `--optimization_mode`, `--embed_drift_coeff`, `--textgrad_max_rewrites`
+- [x] **Package exports** → `src/__init__.py` 新增 SoftPromptTrainer, SoftPromptEmbedding, TextGradTrainer
+
+### Key Design Decision
+> **三种方案共存, factory pattern 路由**:
+> - 原始 DTO: `skill_trainer.py` 不动
+> - Soft Prompt: `soft_prompt_trainer.py` 新文件
+> - TextGrad: `textgrad_trainer.py` 新文件
+> - 统一接口: `optimize()` + `get_reward_for_text()`
+> - 路由: `TTSODecoding._create_optimizer()` 根据 config 创建对应 trainer
+
+### Next Steps
+1. [ ] 运行 Soft Prompt 模式验证 (应该能看到梯度有效流动)
+2. [ ] 运行 TextGrad 模式验证 (应该能看到 skill 被 LLM 有意义地改写)
+3. [ ] 对比三种方案的 RM score 和 skill 质量

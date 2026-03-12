@@ -62,6 +62,15 @@ class TTSOConfig:
     grad_caching: bool = True
     cache_refresh_interval: int = 10  # force full forward every N steps
 
+    # Optimization mode: "dto" | "soft_prompt" | "textgrad"
+    optimization_mode: str = "dto"
+
+    # Soft Prompt specific (Approach A)
+    embed_drift_coeff: float = 0.01  # L2 regularization to keep embeds near init
+
+    # TextGrad specific (Approach B)
+    textgrad_max_rewrites: int = 5
+
     # Selection criteria
     min_reward_threshold: Optional[float] = None
     reward_improvement_threshold: float = 0.0
@@ -126,27 +135,67 @@ class TTSODecoding:
             max_generation_len=self.cfg.max_generation_len,
         )
 
-        # Initialize the skill trainer (inner optimization loop)
-        self.skill_trainer = SkillTrainer(
-            lm_model=lm_model,
-            lm_tokenizer=lm_tokenizer,
-            rm_model=rm_model,
-            rm_tokenizer=rm_tokenizer,
-            max_iters=self.cfg.max_iters,
-            learning_rate=self.cfg.learning_rate,
-            min_lr_ratio=self.cfg.min_lr_ratio,
-            weight_decay=self.cfg.weight_decay,
-            warmup_iters_ratio=self.cfg.warmup_iters_ratio,
-            reward_coeff=self.cfg.reward_coeff,
-            response_nll_coeff=self.cfg.response_nll_coeff,
-            skill_fluency_coeff=self.cfg.skill_fluency_coeff,
-            mixed_precision=self.cfg.mixed_precision,
-            grad_caching=self.cfg.grad_caching,
-            cache_refresh_interval=self.cfg.cache_refresh_interval,
-            show_train_pbar=(self.cfg.verbose >= 3),
-            show_train_logs=(self.cfg.verbose >= 4),
-            device=self.device,
-        )
+        # Initialize the skill optimizer (inner optimization loop)
+        self.skill_trainer = self._create_optimizer()
+
+    def _create_optimizer(self):
+        """Factory: create the appropriate skill optimizer based on config."""
+        mode = self.cfg.optimization_mode
+        if mode == "dto":
+            return SkillTrainer(
+                lm_model=self.lm_model,
+                lm_tokenizer=self.lm_tokenizer,
+                rm_model=self.rm_model,
+                rm_tokenizer=self.rm_tokenizer,
+                max_iters=self.cfg.max_iters,
+                learning_rate=self.cfg.learning_rate,
+                min_lr_ratio=self.cfg.min_lr_ratio,
+                weight_decay=self.cfg.weight_decay,
+                warmup_iters_ratio=self.cfg.warmup_iters_ratio,
+                reward_coeff=self.cfg.reward_coeff,
+                response_nll_coeff=self.cfg.response_nll_coeff,
+                skill_fluency_coeff=self.cfg.skill_fluency_coeff,
+                mixed_precision=self.cfg.mixed_precision,
+                grad_caching=self.cfg.grad_caching,
+                cache_refresh_interval=self.cfg.cache_refresh_interval,
+                show_train_pbar=(self.cfg.verbose >= 3),
+                show_train_logs=(self.cfg.verbose >= 4),
+                device=self.device,
+            )
+        if mode == "soft_prompt":
+            from .soft_prompt_trainer import SoftPromptTrainer
+            return SoftPromptTrainer(
+                lm_model=self.lm_model,
+                lm_tokenizer=self.lm_tokenizer,
+                rm_model=self.rm_model,
+                rm_tokenizer=self.rm_tokenizer,
+                max_iters=self.cfg.max_iters,
+                learning_rate=self.cfg.learning_rate,
+                min_lr_ratio=self.cfg.min_lr_ratio,
+                weight_decay=self.cfg.weight_decay,
+                warmup_iters_ratio=self.cfg.warmup_iters_ratio,
+                reward_coeff=self.cfg.reward_coeff,
+                response_nll_coeff=self.cfg.response_nll_coeff,
+                embed_drift_coeff=self.cfg.embed_drift_coeff,
+                mixed_precision=self.cfg.mixed_precision,
+                show_train_pbar=(self.cfg.verbose >= 3),
+                show_train_logs=(self.cfg.verbose >= 4),
+                device=self.device,
+            )
+        if mode == "textgrad":
+            from .textgrad_trainer import TextGradTrainer
+            return TextGradTrainer(
+                lm_model=self.lm_model,
+                lm_tokenizer=self.lm_tokenizer,
+                rm_model=self.rm_model,
+                rm_tokenizer=self.rm_tokenizer,
+                generator=self._generator,
+                max_rewrites=self.cfg.textgrad_max_rewrites,
+                temperature=self.cfg.temperature,
+                device=self.device,
+                verbose=(self.cfg.verbose >= 2),
+            )
+        raise ValueError(f"Unknown optimization_mode: {mode}")
 
     def _log(self, msg: str, *args, level: int = 1) -> None:
         if self.cfg.verbose >= level:
@@ -222,7 +271,7 @@ class TTSODecoding:
             return result
 
         # Step 4: Optimize skill via DTO
-        self._log("Optimizing skill via DTO...", level=1)
+        self._log("Optimizing skill via %s...", self.cfg.optimization_mode, level=1)
         opt_result = self.skill_trainer.optimize(
             query=query,
             response_text=original_response,

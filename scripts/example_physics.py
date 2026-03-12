@@ -142,11 +142,25 @@ def main() -> None:
     parser.add_argument("--rm", type=str, default='/data/hwt/hf_ckpt/Skywork-Reward-V2-Qwen3-4B')
     parser.add_argument("--device", type=str, default='cuda:6')
     parser.add_argument("--fp32", action="store_true", help="Use float32")
+    parser.add_argument("--optimization_mode", type=str, default="dto",
+                        choices=["dto", "soft_prompt", "textgrad"],
+                        help="Skill optimization method")
     parser.add_argument("--max_iters", type=int, default=100,
+<<<<<<< HEAD
                         help="DTO gradient steps per outer round")
     parser.add_argument("--max_outer_rounds", type=int, default=3,
                         help="Iterative rounds (1=single-round baseline)")
     parser.add_argument("--lr", type=float, default=0.05)
+=======
+                        help="DTO/soft_prompt gradient steps per outer round")
+    parser.add_argument("--max_outer_rounds", type=int, default=4,
+                        help="Iterative rounds (1=single-round baseline)")
+    parser.add_argument("--lr", type=float, default=0.01)
+    parser.add_argument("--embed_drift_coeff", type=float, default=0.01,
+                        help="Soft prompt: embedding drift regularization")
+    parser.add_argument("--textgrad_max_rewrites", type=int, default=5,
+                        help="TextGrad: max rewrite iterations")
+>>>>>>> 64e11a9 (1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--query", type=str, default=None)
     parser.add_argument("--skill", type=str, default=None)
@@ -168,6 +182,7 @@ def main() -> None:
 
     # Build pipeline config (no SkillBank -- direct skill mode)
     ttso_config = TTSOConfig(
+        optimization_mode=args.optimization_mode,
         max_iters=args.max_iters,
         max_outer_rounds=args.max_outer_rounds,
         learning_rate=args.lr,
@@ -176,6 +191,8 @@ def main() -> None:
         reward_coeff=1.0 if rm_model else 0.0,
         mixed_precision=torch.float32 if args.fp32 else torch.bfloat16,
         grad_caching=True,
+        embed_drift_coeff=args.embed_drift_coeff,
+        textgrad_max_rewrites=args.textgrad_max_rewrites,
         rejection_sampling=(rm_model is not None),
         verbose=args.verbose,
     )

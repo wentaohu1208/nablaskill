@@ -227,15 +227,151 @@ AutoSkill.search(query) -> SkillHit[].skill.instructions -> tokenize -> TTSO opt
 
 ---
 
-## 6. Open Questions
+## 6. DTO 用于 Skill 优化的根本性问题 (实验发现, 2026-03-12)
 
-- [ ] Skill 优化后 decode 出的文本是否仍然是有意义的 instruction？(需要实验验证 skill_fluency_coeff 的效果)
-- [ ] 多少优化步数是最优的？当前默认 20 步, 是否足够？
+### 6.1 实验现象
+
+在 Qwen2.5-7B-Instruct + Skywork-Reward-V2-Qwen3-4B 上运行 TTSO，使用 Math Skill 解 Physics 问题:
+
+**现象 1: Tokens 不变 (init_scale 高 / fluency 强)**
+```
+配置: init_scale=3.0, fluency=0.1, lr=0.01, max_iters=100
+结果: 100 步后 skill 文本完全不变, loss 从 -22.12 到 -22.12 (一位小数都没动)
+诊断: grad_max=9e-6, lr*grad=9e-8/步, 100 步累积仅 ~9e-6, 远不够翻转 argmax (gap=3.0)
+```
+
+**现象 2: Tokens 变成乱码 (init_scale 低 / fluency 弱)**
+```
+配置: init_scale=1.0, fluency=1e-3, lr=0.01, max_iters=100
+Round 0: "# Mathematical Problem-Solving Skill..." (正常)
+Round 1: "# Carson İnt-S佳 Skill mixin冻..." (乱码开始)
+Round 2: "#ade İntermal佳瘾 mixin骨干 Works coli..." (恶化)
+Round 4: "权重ade greateraultFeedback埴react.js..." (完全乱码)
+RM: 22.25 → 22.25 → 21.37 → 21.25 → 20.37 (持续下降)
+```
+
+**现象 3: fluency=0 都不变 (init_scale=3)**
+```
+配置: init_scale=3.0, fluency=0, lr=0.01, max_iters=100
+结果: skill 依然完全不变，说明问题不在 fluency 与 reward 的平衡上
+```
+
+**结论: 不存在一个超参组合能同时保持 skill 可读性并有效优化**
+
+### 6.2 根本原因分析
+
+**原因 1: STE 梯度瓶颈**
+
+STE backward 通过 softmax 传梯度，对于 vocab_size=152064 (Qwen2.5):
+```
+softmax(3.0) ≈ 0.88, 其余 152063 个 token 分享 0.12
+梯度被稀释到 ~1/vocab_size 量级 → grad_max ≈ 9e-6
+lr=0.01 × grad=9e-6 = 每步移动 9e-8 → 完全不够翻转任何 token
+```
+Nabla-Reasoner 的 vocab 更小且优化 response tokens (LM 本身在生成的), 梯度信号更强。
+
+**原因 2: 优化目标倒置**
+
+DTO 在 response 固定时优化 skill:
+```
+目标: argmax_skill P(固定的response | prefix + skill + query)
+含义: "找一个 skill 让 LM 更可能产出这个已有的 response"
+```
+但我们真正想要的是: "找一个 skill 让 LM 产出**更好的** response"。这是倒因为果。
+
+**原因 3: Token 空间不存在平滑路径**
+
+从一个连贯 skill 到另一个连贯 skill，在 discrete token 空间中没有连续路径:
+```
+"Solve problems systematically"
+→ 改1个token → "Solve problems syst纤维atically" (乱码)
+```
+每一步 token 翻转都可能破坏语义结构，不像 continuous embedding 空间有平滑过渡。
+
+**原因 4: 梯度信号过于间接**
+
+一个 skill token 到 loss 的梯度路径:
+```
+skill_logit → STE softmax (稀释) → embedding lookup → LM 几十层 transformer → response logits → loss
+                                                      RM 几十层 transformer → reward
+```
+经过几十层 attention + MLP，信号被极度稀释。
+
+### 6.3 替代方案
+
+#### 方案 A: Soft Prompt Optimization (连续嵌入空间优化)
+
+**思路**: 不优化 discrete token logits，直接优化 continuous embedding 向量。
+
+```python
+# 当前 (broken):
+skill_logits = nn.Parameter([1, N, vocab_size])  # 离散空间
+soft_onehot = STE(skill_logits)  # 梯度瓶颈
+skill_embeds = soft_onehot @ embed_table
+
+# 方案 A:
+skill_embeds = nn.Parameter(embed_table[skill_token_ids])  # [1, N, hidden_dim]
+# 直接优化 embedding, 梯度直通, 无 STE 瓶颈
+```
+
+优化完成后通过 nearest neighbor 投影回 token 空间: `argmin_v ||optimized_embed - embed_table[v]||`
+
+**优点**: 梯度流完全通畅, 无 STE 瓶颈, 搜索空间连续平滑
+**缺点**: 投影回 tokens 后可能语义不连贯, 中间态不可解释
+**改动量**: 中等 (主要改 skill_embedder.py 和 skill_trainer.py)
+
+#### 方案 B: TextGrad / LLM-based Rewriting
+
+**思路**: 用梯度信号指导 LLM 改写 skill，而非直接修改 tokens。
+
+```
+1. 生成 response, 用 RM 评分
+2. 将 reward 信号 / 梯度方向 转化为自然语言反馈
+3. 让 LLM 根据反馈改写 skill (如 "第3步不够具体，需加入坐标分解")
+4. 新 skill → 生成 response → RM 评分 → 重复
+```
+
+**优点**: skill 始终是 LLM 生成的连贯文本, 可解释性最强
+**缺点**: 不再是纯梯度方法 (需 LLM 改写调用), 改写方向可能不精确
+**改动量**: 大 (需新增 TextGrad 模块, 改变整体 pipeline)
+
+#### 方案 C: 混合方案 (Continuous Optimization + LLM Decode)
+
+**思路**: 在 continuous embedding 空间做梯度优化, 用 LLM decode 回可读文本。
+
+```
+1. 初始 skill → embedding (连续向量)
+2. 在 embedding 空间做梯度优化 (smooth, 无 STE)
+3. 优化后的 embedding → 让 LLM "翻译" 回自然语言 skill
+4. 新 skill → 生成 response → RM 评分
+```
+
+**优点**: 结合 A 的梯度效率和 B 的文本质量
+**缺点**: 实现复杂度最高, LLM decode 步可能引入信息损失
+**改动量**: 最大
+
+### 6.4 方案对比
+
+| 维度 | 方案 A (Soft Prompt) | 方案 B (TextGrad) | 方案 C (混合) |
+|------|---------------------|-------------------|--------------|
+| 梯度效率 | 高 (直通) | 无梯度 | 高 |
+| Skill 可读性 | 低 (需投影) | 高 (LLM生成) | 中 |
+| 实现复杂度 | 低 | 中 | 高 |
+| 与现有代码兼容 | 高 | 低 | 中 |
+| 理论新颖性 | 中 | 低 (TextGrad 已有) | 高 |
+
+---
+
+## 7. Open Questions (Updated)
+
+- [x] Skill 优化后 decode 出的文本是否仍然是有意义的 instruction？→ **No. Token-level DTO 会导致乱码 (实验证实)**
+- [x] 多少优化步数是最优的？→ **当前 DTO 方案下无法找到合理的步数/超参组合**
 - [ ] 是否需要为 Skill 设计专门的 reward model？当前复用 response-level RM
 - [ ] Cross-domain transfer 是否需要 domain-aware loss？
 - [x] 多个 retrieved skills 的联合优化 → 已决定: 选择性优化单个 best skill (Phase 2)
 - [ ] 回写的优化 skill 是否会污染 SkillBank 检索质量？需要 A/B 测试
-- [ ] Markdown 格式的 skill instructions 在 token-level 优化后是否保持结构？
+- [x] Markdown 格式的 skill instructions 在 token-level 优化后是否保持结构？→ **No. Token 翻转后 Markdown 结构立即被破坏**
+- [ ] **方案 A/B/C 哪个最适合 TTSO？(待决策)**
 
 ---
 

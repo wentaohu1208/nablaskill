@@ -159,10 +159,73 @@ TTSOPipeline (orchestrator)
 
 ---
 
-## Phase 3: Cross-Domain Skill Transfer
-**Status**: [ ] Not Started
-**Priority**: Medium
+## Phase 2.7: DTO 方案验证失败 & 方案重新设计
+**Status**: [x] Implementation Complete
+**Priority**: Critical
 **Dependencies**: Phase 2
+
+### 问题: Token-level DTO 用于 Skill 优化根本不可行
+
+在 Qwen2.5-7B + Skywork-Reward-V2-Qwen3-4B 上实验发现:
+- **超参不存在 sweet spot**: init_scale 高 → tokens 不变; init_scale 低 → tokens 变乱码
+- **STE 梯度瓶颈**: vocab=152K 导致 grad_max ≈ 9e-6，lr=0.01 下每步只移动 9e-8
+- **根因**: 优化目标倒置 (拟合已有 response 而非产出更好的) + token 空间无平滑路径
+
+详细分析见 findings.md §6
+
+### 实现: 三种优化模式共存, 通过 `--optimization_mode` 切换
+
+- [x] **方案 A: Soft Prompt Optimization** → `src/soft_prompt_trainer.py`
+  - `SoftPromptEmbedding`: 直接优化 `nn.Parameter([1, N, hidden_dim])` continuous embeddings
+  - 初始化: 从 skill token IDs 查 LM embedding table 获取初始向量
+  - 梯度直通: 无 STE 瓶颈, 梯度直接流到 embedding 参数
+  - Loss: response_nll + embed_drift (L2 正则, 防止离原始 embedding 太远) + RM reward
+  - 投影回 tokens: cosine similarity nearest neighbor
+  - RM 处理: 投影到最近 LM token → 查 RM embedding table
+- [x] **方案 B: TextGrad / LLM Rewriting** → `src/textgrad_trainer.py`
+  - `TextGradTrainer`: 纯推理方法, 无梯度计算
+  - 每轮: 生成 feedback → LLM 改写 skill → 生成 response → RM 评分 → accept/reject
+  - Feedback 模板: 包含当前 skill, query, response, reward score
+  - Rewrite 模板: 基于 feedback 改写, 保持 Goal + Workflow 结构
+  - Skill 始终是 LLM 生成的连贯文本
+- [x] **原始 DTO** 保留在 `src/skill_trainer.py`, 不做修改
+
+### 切换方式
+
+```bash
+# 原始 DTO (默认)
+python scripts/example_physics.py --optimization_mode dto
+
+# Soft Prompt (Approach A)
+python scripts/example_physics.py --optimization_mode soft_prompt --lr 0.1
+
+# TextGrad (Approach B)
+python scripts/example_physics.py --optimization_mode textgrad --textgrad_max_rewrites 5
+```
+
+### 架构: Factory Pattern 路由
+
+```
+TTSOConfig.optimization_mode → TTSODecoding._create_optimizer()
+  |-- "dto"         → SkillTrainer (原始)
+  |-- "soft_prompt"  → SoftPromptTrainer (方案 A)
+  +-- "textgrad"     → TextGradTrainer (方案 B)
+
+三者共享接口:
+  optimize(query, response_text, skill_text, system_prompt) → Dict
+  get_reward_for_text(query, skill_text, response) → float
+```
+
+### New Files
+- `src/soft_prompt_trainer.py` (~300 lines) — SoftPromptEmbedding + SoftPromptTrainer
+- `src/textgrad_trainer.py` (~280 lines) — TextGradTrainer + prompt templates
+
+---
+
+## Phase 3: Cross-Domain Skill Transfer
+**Status**: [ ] Not Started (blocked by Phase 2.7)
+**Priority**: Medium
+**Dependencies**: Phase 2.7
 
 ### Tasks
 - [ ] 3.1 设计 cross-domain transfer 实验
@@ -228,12 +291,13 @@ TTSOPipeline (orchestrator)
 
 ---
 
-## Technical Risks
+## Technical Risks (Updated)
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Skill text 太短，优化空间有限 | High | 考虑在 latent space 优化而非 token space |
-| 优化后 Skill decode 出的文本不可读 | Medium | 加入 fluency 约束 (LM likelihood) |
-| 计算成本过高 | High | 梯度缓存 + selection criteria 跳过低价值优化 |
-| RM 对 Skill quality 的评估不准确 | High | 使用 process reward model 或 task-specific verifier |
-| Cross-domain transfer 效果不显著 | Medium | 先验证 in-domain optimization 再拓展 |
+| Risk | Impact | Status | Mitigation |
+|------|--------|--------|------------|
+| ~~Skill text 太短，优化空间有限~~ | ~~High~~ | **REALIZED** | Token-level DTO 完全不可行, 需切换方案 |
+| ~~优化后 Skill decode 出的文本不可读~~ | ~~Medium~~ | **REALIZED** | Fluency 约束无法解决 STE 梯度瓶颈问题 |
+| 计算成本过高 | High | Open | 梯度缓存 + selection criteria 跳过低价值优化 |
+| RM 对 Skill quality 的评估不准确 | High | Open | 使用 process reward model 或 task-specific verifier |
+| Cross-domain transfer 效果不显著 | Medium | Blocked | 先解决 Phase 2.7 的方案选择 |
+| **STE 梯度瓶颈 (NEW)** | **Critical** | **REALIZED** | **切换到 continuous embedding 或 LLM-based 优化** |
