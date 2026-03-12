@@ -138,7 +138,7 @@ class SkillTrainer:
             device=self.device, dtype=torch.float32,
         )
         init_logits.scatter_(
-            2, skill_token_ids.unsqueeze(-1), 1  # moderate init scale
+            2, skill_token_ids.unsqueeze(-1), 3  # moderate init scale
         )
 
         # Tokenize response for the LM template
@@ -228,6 +228,20 @@ class SkillTrainer:
                     num_grad_steps += 1
 
             loss.backward()
+            # Debug: log gradient and logits stats every 10 steps
+            if it % 10 == 0:
+                grad = self.skill_embedder.skill_logits.grad
+                logits = self.skill_embedder.skill_logits.data
+                if grad is not None:
+                    logger.info(
+                        "Iter %d | loss=%.4f | grad norm=%.6f | grad max=%.6f | "
+                        "logits mean=%.4f | logits max=%.4f | logits min=%.4f",
+                        it, loss.item(),
+                        grad.norm().item(), grad.abs().max().item(),
+                        logits.mean().item(), logits.max().item(), logits.min().item(),
+                    )
+                else:
+                    logger.info("Iter %d | loss=%.4f | grad is None!", it, loss.item())
             optimizer.step()
             lr_scheduler.step()
 
