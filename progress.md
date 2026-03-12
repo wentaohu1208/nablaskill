@@ -100,6 +100,28 @@
 3. **默认 highest_retrieval_score**: 因为 TTSO 优化本身已贵, 选择阶段不再增加 LLM calls
 4. **Pipeline 支持双模式**: 有 SkillBank 时自动检索, 无 SkillBank 时接受 direct skill_text
 
+---
+
+## Session: 2026-03-12 (Session 4 - Iterative TTSO Variant)
+
+### Completed
+- [x] **2.6 Iterative TTSO (主实验变体)** → `src/ttso.py:run_iterative()`
+  - Skill 和 Response 交替优化 (EM-style outer loop)
+  - 每轮: DTO 优化 skill → regenerate response → RM 评分 → accept/reject
+  - Early stopping: reward 不再提升时停止，追踪全局 best
+  - `TTSOResult` 新增 `round_history` 和 `num_outer_rounds` 字段
+  - `TTSOConfig` 新增 `max_outer_rounds` (默认 1 = 退化为单轮)
+  - Pipeline 自动路由: `max_outer_rounds > 1` → `run_iterative()`
+  - `run.py` 和 `example_physics.py` 均支持 `--max_outer_rounds`
+  - `tests/test_iterative.py` 验证 round history, early stopping, 累积统计
+
+### Key Design Decision
+> **Iterative TTSO 作为主实验, 单轮作为 ablation baseline**
+> - 动机: 单轮 skill 只拟合初始 (可能低质量的) response
+> - 多轮让 skill 和 response 协同进化
+> - 权衡: 每轮 +1 generation + +1 RM eval, 但 early stopping 控制成本
+> - 默认 `max_outer_rounds=3`
+
 ### Next Steps
 1. [ ] 运行 `python scripts/example_physics.py` 验证 end-to-end pipeline
 2. [ ] Phase 3: Cross-Domain Skill Transfer

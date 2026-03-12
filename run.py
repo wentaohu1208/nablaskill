@@ -93,7 +93,10 @@ def main():
     parser.add_argument("--system_prompt", type=str, default=None)
 
     # Optimization
-    parser.add_argument("--max_iters", type=int, default=20)
+    parser.add_argument("--max_iters", type=int, default=20,
+                        help="DTO gradient steps per outer round")
+    parser.add_argument("--max_outer_rounds", type=int, default=1,
+                        help="Iterative rounds (1=single-round, >1=iterative)")
     parser.add_argument("--learning_rate", type=float, default=0.01)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--reward_coeff", type=float, default=1.0)
@@ -147,6 +150,7 @@ def main():
     # Build config
     config = TTSOConfig(
         max_iters=args.max_iters,
+        max_outer_rounds=args.max_outer_rounds,
         learning_rate=args.learning_rate,
         min_lr_ratio=args.min_lr_ratio,
         weight_decay=args.weight_decay,
@@ -176,8 +180,9 @@ def main():
         vllm_model_name=args.vllm_model_name,
     )
 
-    # Run
-    result = ttso.run(
+    # Run (iterative if max_outer_rounds > 1)
+    run_fn = ttso.run_iterative if args.max_outer_rounds > 1 else ttso.run
+    result = run_fn(
         query=args.query,
         skill_text=skill_text,
         system_prompt=args.system_prompt,

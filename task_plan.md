@@ -119,6 +119,20 @@ SkillOptimizer (core engine)
   - 硬编码 Newtonian Mechanics 物理 skill (7步 workflow)
   - 支持 tiny-gpt2 (CPU 测试) 和真实模型 (GPU)
   - 完整输出: original/optimized skill text, responses, RM scores, stats
+- [x] 2.6 **Iterative TTSO 变体 (主实验)** -> `src/ttso.py:run_iterative()`
+  - Skill 和 Response 交替优化: `skill_A + resp_A → skill_B + resp_B → skill_C + resp_C ...`
+  - 每轮: DTO 优化 skill → 重新生成 response → RM 评分 → 接受/拒绝
+  - Early stopping: reward 不再提升时停止
+  - 追踪完整 `round_history` (每轮 skill/response/reward)
+  - `max_outer_rounds` 配置控制, 默认 3 (example), 1 = 退化为原始单轮
+  - Pipeline 自动路由: `max_outer_rounds > 1` → `run_iterative()`, 否则 → `run()`
+
+### Key Decision (Phase 2.6)
+> **Iterative TTSO 作为主实验**:
+> - 单轮 `run()` 保留作为 ablation baseline
+> - 多轮 `run_iterative()` 作为主实验方法
+> - 原因: 避免 skill 只拟合一个可能不好的初始 response (moving-target 问题)
+> - 权衡: 每轮多一次 generation + RM eval, 但 skill 和 response 协同进化
 
 ### Architecture (Phase 2)
 ```
@@ -133,7 +147,8 @@ TTSOPipeline (orchestrator)
   |     +-- best_initial_reward (generate + RM score each)
   |
   +-- TTSODecoding (Phase 1 engine)
-        +-- run(query, skill_text) -> TTSOResult
+        |-- run(query, skill_text) -> TTSOResult           [单轮 baseline]
+        +-- run_iterative(query, skill_text) -> TTSOResult [多轮主实验]
 ```
 
 ### New Files

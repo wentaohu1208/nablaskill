@@ -126,7 +126,10 @@ def main() -> None:
     parser.add_argument("--rm", type=str, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--fp32", action="store_true", help="Use float32")
-    parser.add_argument("--max_iters", type=int, default=10)
+    parser.add_argument("--max_iters", type=int, default=10,
+                        help="DTO gradient steps per outer round")
+    parser.add_argument("--max_outer_rounds", type=int, default=3,
+                        help="Iterative rounds (1=single-round baseline)")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--query", type=str, default=None)
@@ -150,6 +153,7 @@ def main() -> None:
     # Build pipeline config (no SkillBank -- direct skill mode)
     ttso_config = TTSOConfig(
         max_iters=args.max_iters,
+        max_outer_rounds=args.max_outer_rounds,
         learning_rate=args.lr,
         response_nll_coeff=1e-3,
         skill_fluency_coeff=1e-4,
@@ -218,13 +222,25 @@ def main() -> None:
     print(f"\n{'='*60}")
     print("STATS:")
     print(f"{'='*60}")
-    print(f"  Optimized:  {ttso.skill_was_optimized}")
-    print(f"  Accepted:   {ttso.optimization_accepted}")
-    print(f"  RM (orig):  {ttso.original_reward:.4f}")
-    print(f"  RM (final): {ttso.final_reward:.4f}")
-    print(f"  Delta:      {ttso.final_reward - ttso.original_reward:+.4f}")
-    print(f"  LLM Calls:  {ttso.num_llm_calls}")
-    print(f"  Grad Steps: {ttso.num_grad_steps}")
+    print(f"  Optimized:     {ttso.skill_was_optimized}")
+    print(f"  Accepted:      {ttso.optimization_accepted}")
+    print(f"  Outer Rounds:  {ttso.num_outer_rounds}")
+    print(f"  RM (orig):     {ttso.original_reward:.4f}")
+    print(f"  RM (final):    {ttso.final_reward:.4f}")
+    print(f"  Delta:         {ttso.final_reward - ttso.original_reward:+.4f}")
+    print(f"  LLM Calls:     {ttso.num_llm_calls}")
+    print(f"  Grad Steps:    {ttso.num_grad_steps}")
+
+    # Show per-round reward trajectory
+    if ttso.round_history:
+        print(f"\n{'='*60}")
+        print("ROUND HISTORY:")
+        print(f"{'='*60}")
+        for entry in ttso.round_history:
+            rnd = entry["round"]
+            reward = entry["reward"]
+            skill_preview = entry["skill"][:60].replace("\n", " ")
+            print(f"  Round {rnd}: RM={reward:.4f} | skill: {skill_preview}...")
     print(f"{'='*60}")
 
 

@@ -134,14 +134,40 @@ L = -(response_nll_coeff * NLL_response + skill_fluency_coeff * NLL_skill + rewa
 
 ### 3.4 与 Nabla 的关键差异 (Updated)
 
-| 维度 | Nabla-Reasoner | TTSO (Implemented) |
-|------|---------------|-------------------|
-| 优化对象 | Response tokens (末尾) | Skill tokens (中间) |
-| 优化时机 | Per-token loop (多轮) | Per-query (一轮 DTO) |
-| Loss 结构 | NLL + Reward | Response NLL + Skill Fluency + Reward |
-| Template | [prefix][soft_response] | [prefix][soft_skill][suffix] |
-| 后处理 | 直接输出 | 解码 skill text -> 重新生成 response |
-| Rejection | 基于 RM score 比较 | 基于 RM score 比较 (同 Nabla) |
+| 维度 | Nabla-Reasoner | TTSO Single-Round | TTSO Iterative (主实验) |
+|------|---------------|-------------------|------------------------|
+| 优化对象 | Response tokens (末尾) | Skill tokens (中间) | Skill tokens (中间) |
+| 优化时机 | Per-token loop | 一轮 DTO | K 轮 DTO (skill+response 交替) |
+| Loss 结构 | NLL + Reward | Response NLL + Skill Fluency + Reward | 同左，但 response 每轮更新 |
+| Template | [prefix][soft_response] | [prefix][soft_skill][suffix] | 同左，每轮重建 |
+| 后处理 | 直接输出 | 解码 skill → 重新生成 1 次 | 每轮解码 skill → 重新生成 |
+| Rejection | 基于 RM score 比较 | 同 Nabla | 每轮 reject + 最终 reject |
+
+### 3.5 Iterative TTSO 设计分析 (NEW)
+
+**单轮 TTSO 的局限**:
+- DTO 优化 skill 时，response 固定为初始生成的 resp_A
+- Skill 优化目标: "让 skill 更好地解释 resp_A 的产生"
+- 但 resp_A 可能本身质量不高 → skill 拟合了一个不好的目标
+
+**Iterative TTSO 解决思路**:
+```
+Round 0: skill_A → resp_A,  RM = 0.35
+Round 1: optimize(skill_A, resp_A) → skill_B → resp_B,  RM = 0.52
+Round 2: optimize(skill_B, resp_B) → skill_C → resp_C,  RM = 0.61
+Round 3: optimize(skill_C, resp_C) → skill_D → resp_D,  RM = 0.58 ← 下降, 停止
+最终: 选择 Round 2 的 skill_C + resp_C
+```
+
+**潜在风险**:
+- Response 每轮变化 → 优化目标不稳定 (moving target)
+- 可能出现 skill 震荡（round 1 偏向 A 方向, round 2 偏向 B 方向）
+- 计算成本线性增加 (每轮 +1 generation + +1 RM eval)
+
+**缓解措施**:
+- Early stopping: reward 不再提升时立即停止
+- 追踪全局 best (而非只看最后一轮)
+- 默认 `max_outer_rounds=3`，控制最大成本
 
 ---
 

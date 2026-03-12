@@ -159,12 +159,14 @@ class TTSOPipeline:
             )
 
         # Step 2: Run TTSO optimization
+        use_iterative = self.config.ttso_config.max_outer_rounds > 1
+        mode_name = "iterative" if use_iterative else "single-round"
         logger.info(
-            "Running TTSO with skill '%s' (score=%.3f)",
-            candidate.name,
-            candidate.score,
+            "Running %s TTSO with skill '%s' (score=%.3f)",
+            mode_name, candidate.name, candidate.score,
         )
-        ttso_result = self.ttso.run(
+        run_fn = self.ttso.run_iterative if use_iterative else self.ttso.run
+        ttso_result = run_fn(
             query=query,
             skill_text=candidate.instructions,
             system_prompt=system_prompt,
