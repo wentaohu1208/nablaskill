@@ -102,6 +102,10 @@ def main():
                         help="Iterative rounds (1=single-round, >1=iterative)")
     parser.add_argument("--embed_drift_coeff", type=float, default=0.01,
                         help="Soft prompt: embedding drift regularization")
+    parser.add_argument("--rm_projection_temperature", type=float, default=0.1,
+                        help="Soft prompt: softmax temperature for RM embedding projection")
+    parser.add_argument("--init_logit_scale", type=float, default=3.0,
+                        help="DTO: initial one-hot logit scale (higher = more peaked)")
     parser.add_argument("--textgrad_max_rewrites", type=int, default=5,
                         help="TextGrad: max rewrite iterations")
     parser.add_argument("--learning_rate", type=float, default=0.01)
@@ -169,6 +173,8 @@ def main():
         mixed_precision=MIXED_PRECISION_MAP[args.mixed_precision],
         grad_caching=not args.no_grad_caching,
         embed_drift_coeff=args.embed_drift_coeff,
+        rm_projection_temperature=args.rm_projection_temperature,
+        init_logit_scale=args.init_logit_scale,
         textgrad_max_rewrites=args.textgrad_max_rewrites,
         min_reward_threshold=args.min_reward_threshold,
         rejection_sampling=not args.no_rejection_sampling,

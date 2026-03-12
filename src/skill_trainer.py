@@ -63,6 +63,7 @@ class SkillTrainer:
         reward_coeff: float = 0.1,
         response_nll_coeff: float = 1e-3,
         skill_fluency_coeff: float = 1e-3,
+        init_logit_scale: float = 3.0,
         lr_scheduler_type: str = "cosine",
         device: Optional[torch.device] = None,
         mixed_precision: torch.dtype = torch.bfloat16,
@@ -84,6 +85,7 @@ class SkillTrainer:
         self.reward_coeff = reward_coeff
         self.response_nll_coeff = response_nll_coeff
         self.skill_fluency_coeff = skill_fluency_coeff
+        self.init_logit_scale = init_logit_scale
         self.lr_scheduler_type = lr_scheduler_type
 
         self.mixed_precision = mixed_precision
@@ -138,7 +140,7 @@ class SkillTrainer:
             device=self.device, dtype=torch.float32,
         )
         init_logits.scatter_(
-            2, skill_token_ids.unsqueeze(-1), 10  # moderate init scale
+            2, skill_token_ids.unsqueeze(-1), self.init_logit_scale
         )
 
         # Tokenize response for the LM template

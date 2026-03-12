@@ -52,23 +52,83 @@ def align_vocab(
     ref_tokenizer=None,
     vocab_dim: int = 0,
 ) -> torch.Tensor:
-    """Align the vocabulary of src embedding to ref tokenizer order."""
+    """Align the vocabulary of src embedding to ref tokenizer order.
+
+    When LM and RM use different tokenizers, this reorders the RM embedding
+    table so that row *i* corresponds to the same token as row *i* in the
+    LM tokenizer. Tokens missing from the RM vocab are mapped to pad_token.
+
+    Args:
+        src_embed: Source embedding table (e.g., RM embeddings).
+        src_tokenizer: Tokenizer that matches ``src_embed`` row order.
+        ref_tokenizer: Target tokenizer to align to (e.g., LM tokenizer).
+            If None or same vocab as src, only trims/validates size.
+        vocab_dim: Dimension along which vocab tokens are arranged.
+
+    Returns:
+        Aligned embedding tensor with vocab size == ``len(ref_tokenizer)``.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    src_vocab_size = src_embed.shape[vocab_dim]
+
+    # Same vocab: just validate size
     if ref_tokenizer is None or ref_tokenizer.get_vocab() == src_tokenizer.get_vocab():
-        if src_embed.shape[vocab_dim] > len(src_tokenizer):
+        target_size = len(src_tokenizer)
+        if src_vocab_size > target_size:
+            _logger.info(
+                "Trimming embedding from %d to %d (same vocab, extra rows)",
+                src_vocab_size, target_size,
+            )
             slice_idx = [slice(None)] * len(src_embed.shape)
-            slice_idx[vocab_dim] = slice(0, len(src_tokenizer))
+            slice_idx[vocab_dim] = slice(0, target_size)
             return src_embed[tuple(slice_idx)]
-        if src_embed.shape[vocab_dim] == len(src_tokenizer):
+        if src_vocab_size == target_size:
             return src_embed
         raise ValueError(
-            f"Embedding vocab size {src_embed.shape[vocab_dim]} < tokenizer vocab {len(src_tokenizer)}"
+            f"Embedding vocab size {src_vocab_size} < tokenizer vocab {target_size}"
         )
+
+    # Different vocabs: reorder rows to match ref_tokenizer order
     src_vocab = src_tokenizer.get_vocab()
     ref_vocab = sorted(ref_tokenizer.get_vocab().items(), key=lambda t: t[1])
-    idx_mapping = [src_vocab.get(t[0], src_tokenizer.pad_token_id) for t in ref_vocab]
-    return torch.index_select(
-        src_embed, vocab_dim, torch.as_tensor(idx_mapping, device=src_embed.device)
+
+    # Validate pad_token_id for fallback mapping
+    pad_id = src_tokenizer.pad_token_id
+    if pad_id is None:
+        pad_id = 0
+        _logger.warning(
+            "src_tokenizer has no pad_token_id, using 0 as fallback for "
+            "unmapped tokens in vocab alignment"
+        )
+
+    idx_mapping = []
+    num_unmapped = 0
+    for token_str, _ref_idx in ref_vocab:
+        src_idx = src_vocab.get(token_str)
+        if src_idx is not None and src_idx < src_vocab_size:
+            idx_mapping.append(src_idx)
+        else:
+            idx_mapping.append(pad_id)
+            num_unmapped += 1
+
+    if num_unmapped > 0:
+        _logger.warning(
+            "Vocab alignment: %d / %d ref tokens not found in src vocab "
+            "(mapped to pad_id=%d)",
+            num_unmapped, len(ref_vocab), pad_id,
+        )
+
+    aligned = torch.index_select(
+        src_embed, vocab_dim,
+        torch.as_tensor(idx_mapping, device=src_embed.device),
     )
+    _logger.info(
+        "Vocab aligned: src=%d -> ref=%d tokens (unmapped=%d)",
+        src_vocab_size, len(ref_vocab), num_unmapped,
+    )
+    return aligned
 
 
 # ---------------------------------------------------------------------------

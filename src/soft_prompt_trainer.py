@@ -45,10 +45,12 @@ class SoftPromptEmbedding(nn.Module):
         lm_tokenizer,
         rm_model: Optional[nn.Module] = None,
         rm_tokenizer=None,
+        rm_projection_temperature: float = 0.1,
     ):
         super().__init__()
         self.lm_tokenizer = lm_tokenizer
         self.rm_tokenizer = rm_tokenizer
+        self.rm_projection_temperature = rm_projection_temperature
 
         self.skill_embeds: Optional[nn.Parameter] = None
         self.init_embeds: Optional[torch.Tensor] = None
@@ -106,7 +108,8 @@ class SoftPromptEmbedding(nn.Module):
             embeds_norm = F.normalize(embeds.float(), dim=-1)
             table_norm = F.normalize(self.lm_embed_table.float(), dim=-1)
             soft_weights = F.softmax(
-                torch.matmul(embeds_norm, table_norm.T) / 0.1, dim=-1
+                torch.matmul(embeds_norm, table_norm.T) / self.rm_projection_temperature,
+                dim=-1,
             )  # [N, vocab_size]
             rm_embeds = torch.matmul(
                 soft_weights.to(self.rm_embed_table.dtype), self.rm_embed_table
@@ -181,6 +184,7 @@ class SoftPromptTrainer:
         reward_coeff: float = 1.0,
         response_nll_coeff: float = 1e-3,
         embed_drift_coeff: float = 0.01,
+        rm_projection_temperature: float = 0.1,
         mixed_precision: torch.dtype = torch.bfloat16,
         show_train_pbar: bool = False,
         show_train_logs: bool = False,
@@ -207,7 +211,8 @@ class SoftPromptTrainer:
         self.show_train_logs = show_train_logs
 
         self.embedder = SoftPromptEmbedding(
-            lm_model, lm_tokenizer, rm_model, rm_tokenizer
+            lm_model, lm_tokenizer, rm_model, rm_tokenizer,
+            rm_projection_temperature=rm_projection_temperature,
         )
         self.embedder = self.embedder.to(self.device)
 

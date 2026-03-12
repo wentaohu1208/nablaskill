@@ -150,8 +150,18 @@ def main() -> None:
     parser.add_argument("--max_outer_rounds", type=int, default=4,
                         help="Iterative rounds (1=single-round baseline)")
     parser.add_argument("--lr", type=float, default=0.01)
+    parser.add_argument("--response_nll_coeff", type=float, default=1e-3,
+                        help="Weight for response NLL loss term")
+    parser.add_argument("--skill_fluency_coeff", type=float, default=0.05,
+                        help="Weight for skill fluency loss term (DTO)")
+    parser.add_argument("--reward_coeff", type=float, default=None,
+                        help="Weight for RM reward (default: 1.0 if RM loaded, else 0.0)")
     parser.add_argument("--embed_drift_coeff", type=float, default=0.01,
                         help="Soft prompt: embedding drift regularization")
+    parser.add_argument("--rm_projection_temperature", type=float, default=0.1,
+                        help="Soft prompt: softmax temperature for RM projection")
+    parser.add_argument("--init_logit_scale", type=float, default=3.0,
+                        help="DTO: initial one-hot logit scale")
     parser.add_argument("--textgrad_max_rewrites", type=int, default=5,
                         help="TextGrad: max rewrite iterations")
     parser.add_argument("--seed", type=int, default=42)
@@ -179,12 +189,14 @@ def main() -> None:
         max_iters=args.max_iters,
         max_outer_rounds=args.max_outer_rounds,
         learning_rate=args.lr,
-        response_nll_coeff=1e-3,
-        skill_fluency_coeff=0.05,
-        reward_coeff=1.0 if rm_model else 0.0,
+        response_nll_coeff=args.response_nll_coeff,
+        skill_fluency_coeff=args.skill_fluency_coeff,
+        reward_coeff=args.reward_coeff if args.reward_coeff is not None else (1.0 if rm_model else 0.0),
         mixed_precision=torch.float32 if args.fp32 else torch.bfloat16,
         grad_caching=True,
         embed_drift_coeff=args.embed_drift_coeff,
+        rm_projection_temperature=args.rm_projection_temperature,
+        init_logit_scale=args.init_logit_scale,
         textgrad_max_rewrites=args.textgrad_max_rewrites,
         rejection_sampling=(rm_model is not None),
         verbose=args.verbose,

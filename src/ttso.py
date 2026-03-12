@@ -67,6 +67,10 @@ class TTSOConfig:
 
     # Soft Prompt specific (Approach A)
     embed_drift_coeff: float = 0.01  # L2 regularization to keep embeds near init
+    rm_projection_temperature: float = 0.1  # softmax temperature for RM embedding projection
+
+    # DTO specific
+    init_logit_scale: float = 3.0  # initial one-hot logit scale (higher = more peaked)
 
     # TextGrad specific (Approach B)
     textgrad_max_rewrites: int = 5
@@ -155,6 +159,7 @@ class TTSODecoding:
                 reward_coeff=self.cfg.reward_coeff,
                 response_nll_coeff=self.cfg.response_nll_coeff,
                 skill_fluency_coeff=self.cfg.skill_fluency_coeff,
+                init_logit_scale=self.cfg.init_logit_scale,
                 mixed_precision=self.cfg.mixed_precision,
                 grad_caching=self.cfg.grad_caching,
                 cache_refresh_interval=self.cfg.cache_refresh_interval,
@@ -177,6 +182,7 @@ class TTSODecoding:
                 reward_coeff=self.cfg.reward_coeff,
                 response_nll_coeff=self.cfg.response_nll_coeff,
                 embed_drift_coeff=self.cfg.embed_drift_coeff,
+                rm_projection_temperature=self.cfg.rm_projection_temperature,
                 mixed_precision=self.cfg.mixed_precision,
                 show_train_pbar=(self.cfg.verbose >= 3),
                 show_train_logs=(self.cfg.verbose >= 4),
