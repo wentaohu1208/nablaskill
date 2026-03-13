@@ -393,13 +393,13 @@ Nabla **不是** 逐个 token 独立优化的:
 | 采样 | 需要 `sample_token()` 产生初始值 | 已有初始 skill tokens |
 | Response | 每步可能变化 | 非优化变量, 但每步 rollout 经过 response 计算 loss |
 | KV Cache | 对 past tokens 缓存 | 对 prefix + past_skill_tokens 缓存 |
-| Selector | entropy/confidence/gradient | 可简化 (所有 skill token 都优化) |
+| Selector | entropy/confidence/gradient | 无 (已删除, one-hot 初始化下 entropy/confidence 退化) |
 
 ### 8.5 适配设计 (for Skill)
 
-由于 skill tokens 数量有限 (通常 50-200 tokens)，可简化 selector/sampling，但保留 **rollout 到最后** 的核心:
+由于 skill tokens 数量有限 (通常 50-200 tokens)，可简化 sampling，但保留 **rollout 到最后** 的核心:
 
-- **无 selector**: 所有 skill token 都参与优化 (不跳过)
+- **Selector 已删除**: entropy/confidence selector 在 one-hot 初始化下退化 (所有位置 softmax 分布相同 → 全 skip 或全 optimize), 仅 gradient selector 理论可行但性价比不足
 - **无 sampling**: 初始 skill tokens 已知 (来自原始 skill text)
 - **Lookahead = 剩余所有 skill tokens**: 每次优化当前位置到末尾的所有 skill tokens
 - **提交 1 token, 滑动窗口**: commit 后缩短 ahead, prefix 增长
@@ -456,6 +456,7 @@ nablaskill/
 │   ├── skill_embedder.py        # DiffSkillLogitsToEmbedding (STE + soft embeds)
 │   ├── skill_template.py        # SkillGenerationTemplate + SkillRewardTemplate
 │   ├── skill_trainer.py         # SkillTrainer (DTO optimization loop)
+│   ├── sequential_states.py     # SequentialSkillStates (past/ahead state management)
 │   ├── sequential_trainer.py    # SequentialSkillTrainer (token-by-token DTO)
 │   ├── soft_prompt_trainer.py   # SoftPromptTrainer (continuous embedding optimization)
 │   ├── ttso.py                  # TTSODecoding (inner engine + factory router)
@@ -464,7 +465,8 @@ nablaskill/
 ├── run.py                       # Single-prompt CLI entry point
 ├── scripts/
 │   ├── example_physics.py       # End-to-end example with hardcoded skill
-│   └── sweep_hyperparams.sh     # 1000-config DTO hyperparameter sweep
+│   ├── sweep_hyperparams.sh     # 1000-config DTO hyperparameter sweep
+│   └── sweep_sequential_dto.sh # 214-config Sequential DTO hyperparameter sweep
 ├── tests/
 │   ├── conftest.py              # Shared fixtures (tiny-gpt2)
 │   ├── test_skill_embedder.py   # STE, gradient flow, init/deconstruct

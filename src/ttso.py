@@ -74,6 +74,7 @@ class TTSOConfig:
 
     # Sequential DTO specific
     sequential_commit_every: int = 1  # commit N tokens per step (1 = one-by-one)
+
     # Selection criteria
     min_reward_threshold: Optional[float] = None
     reward_improvement_threshold: float = 0.0

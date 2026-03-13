@@ -655,7 +655,15 @@ for each token to commit:
 - 额外成本: reward 模式 +2 RM calls/changed token; loss 模式 +2 LM+RM calls
 - 统计 accepted/rejected 比例用于诊断优化质量
 
-### 6.8 为什么可能比全局 DTO 更好
+### 6.8 ~~Token Selector~~ (已删除)
+
+> **删除原因**: entropy/confidence selector 在 one-hot 初始化的 `init_ahead_logits()` 下退化。
+> 所有位置的 softmax 分布形状完全相同 (1 个 peak at scale, 其余 0) → entropy 和 confidence
+> 值全部一样 → selector 变为 all-skip 或 all-optimize (无位置区分能力)。
+> Nabla-Reasoner 没有此问题: 其 logits 来自 LM 实际 next-token 预测，每位置分布不同。
+> 仅 gradient selector 理论可行 (依赖语义角色), 但额外 forward-backward 开销不值得。
+
+### 6.9 为什么可能比全局 DTO 更好
 
 ```
 全局 DTO 的问题:
@@ -794,9 +802,9 @@ Soft Prompt: 连续 embedding 空间微调 — 梯度充足, 搜索空间合理,
 | Drift 正则 | `src/soft_prompt_trainer.py` | `drift_loss()` |
 | Soft 优化主循环 | `src/soft_prompt_trainer.py` | `optimize()` |
 | **Sequential DTO** | | |
-| 状态管理 | `src/sequential_trainer.py` | `SequentialSkillStates` |
-| Past/Ahead 分离 | `src/sequential_trainer.py` | `get_past_embeds()`, `init_ahead_logits()` |
-| Commit 机制 | `src/sequential_trainer.py` | `commit()`, `commit_token_ids()` |
+| 状态管理 | `src/sequential_states.py` | `SequentialSkillStates` |
+| Past/Ahead 分离 | `src/sequential_states.py` | `get_past_embeds()`, `init_ahead_logits()` |
+| Commit 机制 | `src/sequential_states.py` | `commit()`, `commit_token_ids()` |
 | Rejection Sampling | `src/sequential_trainer.py` | `_evaluate_trajectory_reward()` |
 | 全序列拼接 (LM) | `src/sequential_trainer.py` | `_build_full_embeds()` |
 | 全序列拼接 (RM) | `src/sequential_trainer.py` | `_build_rm_full_embeds()` |

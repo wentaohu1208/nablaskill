@@ -7,8 +7,8 @@
 # Tier 1: Core grid (lr × scale × iters_per_pos)              — 80 configs
 # Tier 2: commit_every sweep                                    — 48 configs
 # Tier 3: Loss coefficient sweep (nll × fluency × reward)      — 80 configs
-# Tier 4: Outer rounds sweep                                    — 30 configs
-# Total: ~238 configs
+# Tier 4: Outer rounds sweep                                    — 6 configs
+# Total: ~214 configs
 #
 # Usage:
 #   bash scripts/sweep_sequential_dto.sh
@@ -81,7 +81,7 @@ done
 # Fix loss coefficients, sweep outer_rounds × a few inner combos
 # 5 rounds × 6 inner combos = 30 configs
 # ============================================================================
-for ROUNDS in 1 2 3 5 7; do
+for ROUNDS in 1; do
   for COMBO in \
     "0.01 2.0 20" \
     "0.01 3.0 20" \

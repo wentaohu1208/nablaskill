@@ -207,8 +207,12 @@ TTSOConfig.optimization_mode → TTSODecoding._create_optimizer()
   +-- "sequential_dto"  → SequentialSkillTrainer (逐 token DTO)
 
 三者共享接口:
-  optimize(query, response_text, skill_text, system_prompt) → Dict
+  optimize(query, response_text, skill_text, system_prompt, **kwargs) → Dict
   get_reward_for_text(query, skill_text, response) → float
+
+SequentialSkillTrainer 内部组件:
+  SequentialSkillStates (src/sequential_states.py) — past/ahead token 管理
+  _evaluate_trajectory_reward() — trajectory-based rejection sampling
 ```
 
 ### Files
@@ -288,7 +292,9 @@ TTSOConfig.optimization_mode → TTSODecoding._create_optimizer()
   - MPC 重初始化: 每步从 original tokens 重初始化 ahead logits
   - 移除旧的 `_evaluate_token_choice()` 和 `_evaluate_token_reward()` (embedding-space 比较)
   - 移除 `--sequential_rejection_criterion` 配置项 (trajectory-based 为唯一模式)
-- [ ] 2.9.7 单元测试 + 端到端验证（本地环境若是不行就算了）
+- [x] ~~2.9.7 Token Selector~~ — **已删除**: entropy/confidence selector 在 one-hot 初始化下退化 (所有位置 softmax 分布相同), 仅 gradient selector 有效但性价比不够
+  - `SequentialSkillStates` 提取为独立文件 `src/sequential_states.py` (保留)
+- [ ] 2.9.8 单元测试 + 端到端验证（本地环境若是不行就算了）
 
 ---
 

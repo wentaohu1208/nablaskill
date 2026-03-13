@@ -368,3 +368,63 @@
 ### Next Steps
 1. [ ] 端到端验证 (`--optimization_mode sequential_dto`)
 2. [ ] Phase 3: Cross-Domain Skill Transfer
+
+---
+
+## Session: 2026-03-13 (Session 12 - Token Selector Mechanism)
+
+### Completed
+- [x] **Token Selector 机制** — 参考 Nabla-Reasoner `move_to_next_optimizable_token()` 实现
+  - 三种 selector (均可独立启用, `None` = 禁用):
+    - **Entropy**: skip if `entropy < threshold` (模型已确定, logits 分布集中)
+    - **Confidence**: skip if `top_prob > threshold` (最高概率 token 已很确定)
+    - **Gradient**: skip if `grad_norm < threshold` (弱梯度信号, 优化无效果)
+  - `_select_optimizable_positions()`: 计算 ahead tokens 的 boolean mask `[ahead_len]`
+  - `_compute_ahead_grad_norm()`: 一次 forward-backward 获取每位置梯度 L2 norm
+    - 使用 `torch.enable_grad()` 确保在 `@torch.no_grad()` 调用者内正确计算梯度
+  - 优化循环改为 `while not states.is_done`:
+    - 每步先 selector 跳过连续不需优化的 leading positions
+    - 跳过的 position 直接 commit original token (零梯度步, 大幅节省计算)
+  - TTSOConfig / factory / CLI 完整链路更新
+- [x] **文件拆分**: `SequentialSkillStates` 提取为 `src/sequential_states.py` (136 lines)
+- [x] **Code review 修复**:
+  - CRITICAL: `@torch.no_grad()` 破坏梯度计算 → `torch.enable_grad()` 包裹
+  - MEDIUM: Entropy 数值稳定性 → 改用 `log_softmax` 避免 `log(0)`
+  - MEDIUM: `commit_every < 1` 验证 → 加入 `ValueError` 检查
+  - HIGH: `_compute_ahead_grad_norm` 内存泄漏 → 显式 `del` 清理计算图
+- [x] **更新所有 markdown 文件**
+
+### Modified Files
+- `src/sequential_trainer.py` — Token selector + while loop + 文件拆分
+- `src/sequential_states.py` — **新建** (从 sequential_trainer.py 提取)
+- `src/ttso.py` — TTSOConfig 新增 3 个 selector threshold 字段, factory 传参
+- `src/__init__.py` — import 路径更新
+- `run.py` — 新增 3 个 CLI args
+- `scripts/example_physics.py` — 新增 3 个 CLI args
+
+### Key Design Decision
+> **Selector 遵循 Nabla-Reasoner 的 "skip leading, optimize first" 策略**:
+> - 对所有 ahead positions 计算 selector mask
+> - 找到第一个需要优化的 position → 跳过之前所有 positions
+> - 跳过的 position 直接 commit original token (零梯度步)
+> - 三个 selector 可独立开关, 默认全部禁用 (不影响现有行为)
+
+### ⚠️ Selector 已删除 (Session 12 后续)
+
+**原因**: entropy/confidence selector 在 one-hot 初始化的 logits 下根本不可行:
+- `init_ahead_logits()` 创建 scaled one-hot 向量 `[0, ..., scale, ..., 0]`
+- 所有位置的 softmax 分布形状相同 → entropy 和 confidence 值全部一样
+- selector 退化为 all-skip 或 all-optimize (无位置区分能力)
+- Nabla-Reasoner 没有此问题: 其 logits 来自 LM 实际预测 (每位置分布不同)
+- 仅 gradient selector 理论可行 (依赖语义角色, 不依赖 logit 形状), 但性价比不足
+
+**已删除的代码**:
+- `sequential_trainer.py`: `_select_optimizable_positions()`, `_compute_ahead_grad_norm()`, selector 相关循环逻辑
+- `ttso.py`: TTSOConfig 3 个 selector threshold 字段, factory 传参
+- `run.py`, `example_physics.py`: 3 个 CLI args
+- `sweep_sequential_dto.sh`: Tier 5 (selector sweep) + Tier 6 (selector+core combos)
+- `sequential_states.py` 保留 (文件拆分与 selector 无关)
+
+### Next Steps
+1. [ ] 端到端验证 (`--optimization_mode sequential_dto`)
+2. [ ] Phase 3: Cross-Domain Skill Transfer
