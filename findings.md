@@ -320,45 +320,114 @@ skill_embeds = nn.Parameter(embed_table[skill_token_ids])  # [1, N, hidden_dim]
 **缺点**: 投影回 tokens 后可能语义不连贯, 中间态不可解释
 **改动量**: 中等 (主要改 skill_embedder.py 和 skill_trainer.py)
 
-#### 方案 B: TextGrad / LLM-based Rewriting
+#### 方案 B: Sequential DTO (逐 token 优化, 参考 Nabla-Reasoner)
 
-**思路**: 用梯度信号指导 LLM 改写 skill，而非直接修改 tokens。
-
-```
-1. 生成 response, 用 RM 评分
-2. 将 reward 信号 / 梯度方向 转化为自然语言反馈
-3. 让 LLM 根据反馈改写 skill (如 "第3步不够具体，需加入坐标分解")
-4. 新 skill → 生成 response → RM 评分 → 重复
-```
-
-**优点**: skill 始终是 LLM 生成的连贯文本, 可解释性最强
-**缺点**: 不再是纯梯度方法 (需 LLM 改写调用), 改写方向可能不精确
-**改动量**: 大 (需新增 TextGrad 模块, 改变整体 pipeline)
-
-#### 方案 C: 混合方案 (Continuous Optimization + LLM Decode)
-
-**思路**: 在 continuous embedding 空间做梯度优化, 用 LLM decode 回可读文本。
+**思路**: 不同时优化所有 skill tokens，而是逐个 token 优化并提交。
 
 ```
-1. 初始 skill → embedding (连续向量)
-2. 在 embedding 空间做梯度优化 (smooth, 无 STE)
-3. 优化后的 embedding → 让 LLM "翻译" 回自然语言 skill
-4. 新 skill → 生成 response → RM 评分
+1. 从 skill token 0 开始
+2. 优化当前 token + 后续所有 ahead tokens (联合优化, 类似 Nabla lookahead)
+3. Commit 当前 token (argmax), 前进到下一个
+4. 每步 rollout 到 response 计算 loss (NLL + RM reward)
 ```
 
-**优点**: 结合 A 的梯度效率和 B 的文本质量
-**缺点**: 实现复杂度最高, LLM decode 步可能引入信息损失
-**改动量**: 最大
+**优点**: 缩小每步搜索空间, 渐进式优化更稳定
+**缺点**: 计算成本 = N × max_iters (N = skill token 数), 串行执行
+**改动量**: 中等 (新增 sequential_trainer.py)
 
 ### 6.4 方案对比
 
-| 维度 | 方案 A (Soft Prompt) | 方案 B (TextGrad) | 方案 C (混合) |
-|------|---------------------|-------------------|--------------|
-| 梯度效率 | 高 (直通) | 无梯度 | 高 |
-| Skill 可读性 | 低 (需投影) | 高 (LLM生成) | 中 |
-| 实现复杂度 | 低 | 中 | 高 |
-| 与现有代码兼容 | 高 | 低 | 中 |
-| 理论新颖性 | 中 | 低 (TextGrad 已有) | 高 |
+| 维度 | 全局 DTO | Soft Prompt | Sequential DTO |
+|------|---------|-------------|----------------|
+| 优化空间 | logits [N, V] | embeddings [N, D] | logits [ahead, V] 逐步 |
+| 梯度效率 | 低 (STE 瓶颈) | 高 (直通) | 中 (STE 但搜索空间小) |
+| Skill 可读性 | 低 (乱码) | 低 (需投影) | 中 (渐进式) |
+| 计算成本 | max_iters | max_iters | N × max_iters |
+| 理论新颖性 | 低 | 中 | 高 (Nabla 启发) |
+
+---
+
+## 8. Nabla-Reasoner Sequential Decoding 深入分析 (2026-03-13)
+
+### 8.1 核心架构: GenerationStates
+
+Nabla-Reasoner 并非逐 token 独立优化，而是维护一个 **lookahead buffer** 联合优化后逐个提交:
+
+```python
+class GenerationStates:
+    past_token_ids: List[int]   # 已提交的 tokens (frozen)
+    ahead_token_ids: List[int]  # lookahead buffer (jointly optimized)
+    kv_cache: past key-value cache for frozen prefix
+```
+
+### 8.2 优化循环
+
+```
+for each position:
+    1. sample_token() → 采样一个新 token 加入 ahead buffer
+    2. move_to_next_optimizable_token() → selector 判断是否需要优化
+       - EntropySelector: 高 entropy 位置需要优化
+       - ConfidenceSelector: 低 confidence 位置需要优化
+       - GradientSelector: 高梯度 norm 位置需要优化
+    3. optimize_ahead_latents() → 联合优化整个 ahead buffer
+       - LatentTrainer.optimize(): Adam + cosine LR, max_iters 步
+       - Loss: NLL + RM reward (同 TTSO)
+    4. commit_n_tokens(1) → 提交第一个 ahead token 到 past
+       - 更新 kv_cache
+       - 缩短 ahead buffer
+```
+
+### 8.3 关键洞察: 联合优化 vs 逐个提交
+
+Nabla **不是** 逐个 token 独立优化的:
+- 每次 `optimize_ahead_latents()` 同时优化 **所有 ahead tokens** (长度=lookahead_len)
+- 但每次只 **提交 1 个 token** (最前面的)
+- 类似 MPC (Model Predictive Control): plan ahead, commit one step
+
+### 8.4 适配到 Skill Token 优化的关键差异
+
+| 维度 | Nabla (Response Tokens) | TTSO Sequential (Skill Tokens) |
+|------|------------------------|-------------------------------|
+| 优化位置 | 末尾 (after prompt) | 中间 (between prefix and response) |
+| Past/Ahead 管理 | past_token_ids 单调增长 | past_skill_tokens 单调增长 |
+| 采样 | 需要 `sample_token()` 产生初始值 | 已有初始 skill tokens |
+| Response | 每步可能变化 | 非优化变量, 但每步 rollout 经过 response 计算 loss |
+| KV Cache | 对 past tokens 缓存 | 对 prefix + past_skill_tokens 缓存 |
+| Selector | entropy/confidence/gradient | 可简化 (所有 skill token 都优化) |
+
+### 8.5 适配设计 (for Skill)
+
+由于 skill tokens 数量有限 (通常 50-200 tokens)，可简化 selector/sampling，但保留 **rollout 到最后** 的核心:
+
+- **无 selector**: 所有 skill token 都参与优化 (不跳过)
+- **无 sampling**: 初始 skill tokens 已知 (来自原始 skill text)
+- **Lookahead = 剩余所有 skill tokens**: 每次优化当前位置到末尾的所有 skill tokens
+- **提交 1 token, 滑动窗口**: commit 后缩短 ahead, prefix 增长
+- **Rollout 经过 response**: 每步 forward 都经过 `[prefix + committed_skills + ahead_skills + response]`，response 不是优化变量但参与 loss 计算 (NLL + RM reward)，与 Nabla-Reasoner 一致
+- **Trajectory-based rejection sampling**: 参考 Nabla 的 `acceptance_criteria`，每次 commit 前通过完整 trajectory 比较 RM reward，只有更好才接受。维护动态 `reward_old` baseline。
+
+```
+Step 0: [prefix] [skill_0(opt) skill_1..N(ahead)] → optimize → rejection → commit skill_0
+Step 1: [prefix skill_0(frozen)] [skill_1(opt) skill_2..N(ahead)] → optimize → rejection → commit skill_1
+...
+Step N: [prefix skill_0..N-1(frozen)] [skill_N(opt)] → optimize → rejection → commit skill_N
+
+Trajectory-Based Rejection Sampling:
+  opt_token = argmax(optimized ahead_logits[0])
+  orig_token = original_skill[position]
+  if opt_token ≠ orig_token:
+    new_skill = decode(past + [opt_token] + argmax(ahead[1:]))
+    new_response = generate(query, new_skill)
+    reward_new = RM(query + new_skill, new_response)
+    if reward_new > reward_old:
+      commit(opt_token); reward_old = reward_new  # 动态提升门槛
+    else:
+      commit(orig_token)  # 保留原始
+
+为什么只比较 RM reward:
+  - ahead tokens 在旧 context 下优化, fluency 天然偏向旧 token → 不公平
+  - 完整 trajectory (generate + RM) 是最可靠的评估方式
+```
 
 ---
 
@@ -371,11 +440,13 @@ skill_embeds = nn.Parameter(embed_table[skill_token_ids])  # [1, N, hidden_dim]
 - [x] 多个 retrieved skills 的联合优化 → 已决定: 选择性优化单个 best skill (Phase 2)
 - [ ] 回写的优化 skill 是否会污染 SkillBank 检索质量？需要 A/B 测试
 - [x] Markdown 格式的 skill instructions 在 token-level 优化后是否保持结构？→ **No. Token 翻转后 Markdown 结构立即被破坏**
-- [ ] **方案 A/B/C 哪个最适合 TTSO？(待决策)**
+- [x] **方案 A/B/C 哪个最适合 TTSO？** → dto/soft_prompt/sequential_dto 三种 (TextGrad 已删除)
+- [ ] **Sequential DTO 能否解决全局 DTO 的 STE 瓶颈？** — 逐 token commit 缩小搜索空间, 但 STE 问题本质不变
+- [ ] **Sequential 方案 vs Soft Prompt 方案对比**: 哪个更适合 skill optimization?
 
 ---
 
-## 7. Implementation Architecture (v2 — Phase 2)
+## 9. Implementation Architecture (v3 — Phase 2 Complete)
 
 ```
 nablaskill/
@@ -385,12 +456,15 @@ nablaskill/
 │   ├── skill_embedder.py        # DiffSkillLogitsToEmbedding (STE + soft embeds)
 │   ├── skill_template.py        # SkillGenerationTemplate + SkillRewardTemplate
 │   ├── skill_trainer.py         # SkillTrainer (DTO optimization loop)
-│   ├── ttso.py                  # TTSODecoding (inner optimization engine)
-│   ├── pipeline.py              # TTSOPipeline (full orchestrator: retrieve -> select -> optimize -> writeback)
+│   ├── sequential_trainer.py    # SequentialSkillTrainer (token-by-token DTO)
+│   ├── soft_prompt_trainer.py   # SoftPromptTrainer (continuous embedding optimization)
+│   ├── ttso.py                  # TTSODecoding (inner engine + factory router)
+│   ├── pipeline.py              # TTSOPipeline (full orchestrator)
 │   └── skillbank.py             # SkillBankAdapter (AutoSkill SDK wrapper)
 ├── run.py                       # Single-prompt CLI entry point
 ├── scripts/
-│   └── example_physics.py       # End-to-end example with hardcoded physics skill
+│   ├── example_physics.py       # End-to-end example with hardcoded skill
+│   └── sweep_hyperparams.sh     # 1000-config DTO hyperparameter sweep
 ├── tests/
 │   ├── conftest.py              # Shared fixtures (tiny-gpt2)
 │   ├── test_skill_embedder.py   # STE, gradient flow, init/deconstruct
@@ -399,6 +473,7 @@ nablaskill/
 │   └── test_pipeline.py         # Pipeline orchestration, selection, writeback
 ├── eval/                        # (TODO) Benchmark evaluation
 ├── guidance.txt                 # Research direction document
+├── skill_optimization.md        # DTO + Soft Prompt 技术文档
 ├── task_plan.md                 # Planning
 ├── findings.md                  # This file
 └── progress.md                  # Session logs

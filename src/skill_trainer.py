@@ -112,6 +112,7 @@ class SkillTrainer:
         response_text: str,
         skill_text: str,
         system_prompt: Optional[str] = None,
+        **kwargs,
     ) -> Dict:
         """Run DTO to optimize skill tokens.
 
@@ -183,6 +184,7 @@ class SkillTrainer:
 
         # Initial state
         current_skill_text = self.skill_embedder.decode_text()
+        current_token_ids = self.skill_embedder.argmax_decode()
         self._log(f"Initial skill: {current_skill_text}")
 
         cached_grad = None
@@ -251,16 +253,17 @@ class SkillTrainer:
             if not skip_grad and self.grad_caching:
                 cached_grad = soft_onehot.grad.detach().clone()
 
-            # Check if tokens changed -> invalidate cache
-            new_skill_text = self.skill_embedder.decode_text()
-            if new_skill_text != current_skill_text:
+            # Check if token argmax changed -> invalidate cache
+            new_token_ids = self.skill_embedder.argmax_decode()
+            if not torch.equal(new_token_ids, current_token_ids):
                 cached_grad = None
+                new_skill_text = self.skill_embedder.decode_text()
                 self._log(
                     f"Iter {it + 1}/{self.max_iters} | "
                     f"Loss: {final_loss_val:.4f} | "
                     f"Skill: {new_skill_text[:80]}..."
                 )
-                current_skill_text = new_skill_text
+                current_token_ids = new_token_ids
 
             if self.show_train_pbar and not self.show_train_logs:
                 train_iter.set_description(f"Loss: {final_loss_val:.4f}")
@@ -366,7 +369,7 @@ class SkillTrainer:
         """Score a (query+skill, response) pair with the RM."""
         if self.rm_model is None:
             return 0.0
-        prompt = f"Use the following skill:\n{skill_text}\n\nProblem: {query}"
+        prompt = f"Use the following skill to solve the problem:\n{skill_text}\n\nProblem: {query}"
         conv = [
             {"role": "user", "content": prompt},
             {"role": "assistant", "content": response},

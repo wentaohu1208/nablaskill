@@ -94,7 +94,7 @@ def main():
 
     # Optimization
     parser.add_argument("--optimization_mode", type=str, default="dto",
-                        choices=["dto", "soft_prompt", "textgrad"],
+                        choices=["dto", "soft_prompt", "sequential_dto"],
                         help="Skill optimization method")
     parser.add_argument("--max_iters", type=int, default=20,
                         help="DTO/soft_prompt gradient steps per outer round")
@@ -106,8 +106,8 @@ def main():
                         help="Soft prompt: softmax temperature for RM embedding projection")
     parser.add_argument("--init_logit_scale", type=float, default=3.0,
                         help="DTO: initial one-hot logit scale (higher = more peaked)")
-    parser.add_argument("--textgrad_max_rewrites", type=int, default=5,
-                        help="TextGrad: max rewrite iterations")
+    parser.add_argument("--sequential_commit_every", type=int, default=1,
+                        help="Sequential DTO: commit N tokens per step")
     parser.add_argument("--learning_rate", type=float, default=0.01)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--reward_coeff", type=float, default=1.0)
@@ -175,7 +175,7 @@ def main():
         embed_drift_coeff=args.embed_drift_coeff,
         rm_projection_temperature=args.rm_projection_temperature,
         init_logit_scale=args.init_logit_scale,
-        textgrad_max_rewrites=args.textgrad_max_rewrites,
+        sequential_commit_every=args.sequential_commit_every,
         min_reward_threshold=args.min_reward_threshold,
         rejection_sampling=not args.no_rejection_sampling,
         max_generation_len=args.max_generation_len,

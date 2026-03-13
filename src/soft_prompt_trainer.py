@@ -226,6 +226,7 @@ class SoftPromptTrainer:
         response_text: str,
         skill_text: str,
         system_prompt: Optional[str] = None,
+        **kwargs,
     ) -> Dict:
         """Run soft prompt optimization on skill embeddings.
 
@@ -392,7 +393,7 @@ class SoftPromptTrainer:
         """Score a (query+skill, response) pair with the RM."""
         if self.rm_model is None:
             return 0.0
-        prompt = f"Use the following skill:\n{skill_text}\n\nProblem: {query}"
+        prompt = f"Use the following skill to solve the problem:\n{skill_text}\n\nProblem: {query}"
         conv = [
             {"role": "user", "content": prompt},
             {"role": "assistant", "content": response},

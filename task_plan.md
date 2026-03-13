@@ -2,7 +2,7 @@
 
 > **Project**: nablaskill
 > **Created**: 2026-03-12
-> **Status**: Phase 2 Complete, Phase 3 Next
+> **Status**: Phase 2 Fully Complete (2.8 hardening + 2.9 sequential design), Phase 3 Next
 > **Goal**: 将 Nabla-Reasoner 的 test-time gradient optimization 思想应用于 Skill-based Agent 系统，实现推理时动态优化 Skill
 
 ---
@@ -182,13 +182,8 @@ TTSOPipeline (orchestrator)
   - Loss: response_nll + embed_drift (L2 正则, 防止离原始 embedding 太远) + RM reward
   - 投影回 tokens: cosine similarity nearest neighbor
   - RM 处理: 投影到最近 LM token → 查 RM embedding table
-- [x] **方案 B: TextGrad / LLM Rewriting** → `src/textgrad_trainer.py`
-  - `TextGradTrainer`: 纯推理方法, 无梯度计算
-  - 每轮: 生成 feedback → LLM 改写 skill → 生成 response → RM 评分 → accept/reject
-  - Feedback 模板: 包含当前 skill, query, response, reward score
-  - Rewrite 模板: 基于 feedback 改写, 保持 Goal + Workflow 结构
-  - Skill 始终是 LLM 生成的连贯文本
 - [x] **原始 DTO** 保留在 `src/skill_trainer.py`, 不做修改
+- ~~方案 B: TextGrad~~ — 已删除 (2026-03-13)
 
 ### 切换方式
 
@@ -199,26 +194,101 @@ python scripts/example_physics.py --optimization_mode dto
 # Soft Prompt (Approach A)
 python scripts/example_physics.py --optimization_mode soft_prompt --lr 0.1
 
-# TextGrad (Approach B)
-python scripts/example_physics.py --optimization_mode textgrad --textgrad_max_rewrites 5
+# Sequential DTO (逐 token 优化)
+python scripts/example_physics.py --optimization_mode sequential_dto --max_iters 20
 ```
 
 ### 架构: Factory Pattern 路由
 
 ```
 TTSOConfig.optimization_mode → TTSODecoding._create_optimizer()
-  |-- "dto"         → SkillTrainer (原始)
-  |-- "soft_prompt"  → SoftPromptTrainer (方案 A)
-  +-- "textgrad"     → TextGradTrainer (方案 B)
+  |-- "dto"             → SkillTrainer (全局 DTO)
+  |-- "soft_prompt"     → SoftPromptTrainer (连续 embedding)
+  +-- "sequential_dto"  → SequentialSkillTrainer (逐 token DTO)
 
 三者共享接口:
   optimize(query, response_text, skill_text, system_prompt) → Dict
   get_reward_for_text(query, skill_text, response) → float
 ```
 
-### New Files
+### Files
 - `src/soft_prompt_trainer.py` (~300 lines) — SoftPromptEmbedding + SoftPromptTrainer
-- `src/textgrad_trainer.py` (~280 lines) — TextGradTrainer + prompt templates
+- ~~`src/textgrad_trainer.py`~~ — 已删除
+
+---
+
+## Phase 2.8: Code Hardening & Hyperparameter Tooling
+**Status**: [x] Complete
+**Priority**: Medium
+**Dependencies**: Phase 2.7
+
+### Tasks
+- [x] 2.8.1 消除硬编码超参数
+  - `soft_prompt_trainer.py`: RM 投影 softmax temperature `/ 0.1` → `/ self.rm_projection_temperature` (可配置)
+  - `skill_trainer.py`: `init_logits.scatter_(2, ..., 10)` → `self.init_logit_scale` (可配置)
+  - `ttso.py`: TTSOConfig 新增 `rm_projection_temperature` 和 `init_logit_scale` 字段
+  - Factory `_create_optimizer()` 传递新参数到对应 trainer
+- [x] 2.8.2 加固 `align_vocab()` 边界检查
+  - `pad_token_id is None` fallback (默认 0 + warning)
+  - `src_idx < src_vocab_size` 边界检查防止 out-of-bounds
+  - 新增 unmapped tokens 计数 warning 和 alignment result info 日志
+- [x] 2.8.3 暴露 loss 配比为 CLI 参数
+  - `example_physics.py` 新增: `--response_nll_coeff`, `--skill_fluency_coeff`, `--reward_coeff`
+  - `run.py` 新增: `--rm_projection_temperature`, `--init_logit_scale`
+- [x] 2.8.4 创建 DTO 超参数扫描脚本 → `scripts/sweep_hyperparams.sh`
+  - 1000 个超参数组合, 分 5 tier 覆盖:
+    - Tier 1: Core grid (lr × init_scale × max_iters) = 256 configs
+    - Tier 2a: sweep response_nll_coeff = 160 configs
+    - Tier 2b: sweep skill_fluency_coeff = 180 configs
+    - Tier 2c: sweep reward_coeff = 160 configs
+    - Tier 3: combined extreme configs = 244 configs
+  - 每个 config 结果保存到 `outputs/sweep_YYYYMMDD_HHMMSS/{config_name}.txt`
+  - 自动打印 summary table (RM_orig, RM_final, Delta)
+- [x] 2.8.5 技术文档 → `skill_optimization.md`
+  - 合并 DTO + Soft Prompt 方法的完整技术文档
+  - 覆盖 pipeline 流程、loss 细节、STE/nearest neighbor 投影、方案对比
+
+---
+
+## Phase 2.9: Sequential Token-by-Token Skill Optimization (设计)
+**Status**: [x] Research & Design Complete, Implementation Pending
+**Priority**: High
+**Dependencies**: Phase 2.7
+
+### 动机
+参考 Nabla-Reasoner 的逐 token 优化思想，应用于 skill tokens:
+- 原始 DTO 同时优化所有 skill tokens → STE 梯度瓶颈
+- **新方案**: 逐个 skill token 优化 (token 0 → commit → token 1 → commit → ...)
+- 仅优化 skill tokens，response tokens 固定
+
+### Nabla-Reasoner 架构研究 (已完成)
+- `GenerationStates`: 管理 `past_token_ids` (已提交) + `ahead_token_ids` (待优化 lookahead buffer)
+- `move_to_next_optimizable_token()`: entropy/confidence/gradient selector 选择需优化的 position
+- `optimize_ahead_latents()`: 联合优化所有 ahead tokens (非逐个), 通过 `LatentTrainer.optimize()`
+- `commit_n_tokens()`: 将优化后的 tokens 从 ahead 移到 past
+- `sample_token()` + `acceptance_criteria()`: rejection sampling 确保 token 质量
+
+### 适配设计要点
+1. **位置差异**: Nabla 的 soft tokens 在末尾; TTSO 的 skill tokens 在中间 (prefix+skill+response)
+2. **优化范围**: 每次优化当前 token + 后续 lookahead buffer 的 skill tokens
+3. **提交策略**: 优化完成后 commit 当前 token, 移动到下一个 skill token
+4. **Response 处理**: response 不是优化变量 (不对 response tokens 做梯度更新), 但每次 rollout 都经过 response 计算 loss — 与 Nabla-Reasoner 一致, 每步都 rollout 到最后
+5. **新 optimization_mode**: `"sequential_dto"` 加入 factory pattern
+
+### Tasks
+- [x] 2.9.1 研究 Nabla-Reasoner sequential decoding 架构
+- [x] 2.9.2 确定适配方案 (skill-specific 差异分析)
+- [x] 2.9.3 实现 `SequentialSkillTrainer` → `src/sequential_trainer.py`
+- [x] 2.9.4 实现 `SequentialSkillStates` (past/ahead skill token 管理)
+- [x] 2.9.5 集成到 factory pattern (`--optimization_mode sequential_dto`)
+- [x] 2.9.6 Trajectory-based rejection sampling: 优化后 token 变化时，解码完整 skill → 生成 response → RM 评分 → 与 reward_old 比较
+  - `_evaluate_trajectory_reward()`: 解码 skill → generate → RM score
+  - `commit_token_ids()`: 支持直接提交指定 token IDs
+  - 动态 reward_old: accept 后提升门槛，保证 skill 质量单调不降
+  - MPC 重初始化: 每步从 original tokens 重初始化 ahead logits
+  - 移除旧的 `_evaluate_token_choice()` 和 `_evaluate_token_reward()` (embedding-space 比较)
+  - 移除 `--sequential_rejection_criterion` 配置项 (trajectory-based 为唯一模式)
+- [ ] 2.9.7 单元测试 + 端到端验证（本地环境若是不行就算了）
 
 ---
 

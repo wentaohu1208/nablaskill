@@ -62,7 +62,7 @@ class TTSOConfig:
     grad_caching: bool = True
     cache_refresh_interval: int = 10  # force full forward every N steps
 
-    # Optimization mode: "dto" | "soft_prompt" | "textgrad"
+    # Optimization mode: "dto" | "soft_prompt" | "sequential_dto"
     optimization_mode: str = "dto"
 
     # Soft Prompt specific (Approach A)
@@ -72,9 +72,8 @@ class TTSOConfig:
     # DTO specific
     init_logit_scale: float = 3.0  # initial one-hot logit scale (higher = more peaked)
 
-    # TextGrad specific (Approach B)
-    textgrad_max_rewrites: int = 5
-
+    # Sequential DTO specific
+    sequential_commit_every: int = 1  # commit N tokens per step (1 = one-by-one)
     # Selection criteria
     min_reward_threshold: Optional[float] = None
     reward_improvement_threshold: float = 0.0
@@ -188,18 +187,28 @@ class TTSODecoding:
                 show_train_logs=(self.cfg.verbose >= 4),
                 device=self.device,
             )
-        if mode == "textgrad":
-            from .textgrad_trainer import TextGradTrainer
-            return TextGradTrainer(
+        if mode == "sequential_dto":
+            from .sequential_trainer import SequentialSkillTrainer
+            return SequentialSkillTrainer(
                 lm_model=self.lm_model,
                 lm_tokenizer=self.lm_tokenizer,
                 rm_model=self.rm_model,
                 rm_tokenizer=self.rm_tokenizer,
-                generator=self._generator,
-                max_rewrites=self.cfg.textgrad_max_rewrites,
-                temperature=self.cfg.temperature,
+                response_generator=self._generator,
+                max_iters=self.cfg.max_iters,
+                learning_rate=self.cfg.learning_rate,
+                min_lr_ratio=self.cfg.min_lr_ratio,
+                weight_decay=self.cfg.weight_decay,
+                warmup_iters_ratio=self.cfg.warmup_iters_ratio,
+                reward_coeff=self.cfg.reward_coeff,
+                response_nll_coeff=self.cfg.response_nll_coeff,
+                skill_fluency_coeff=self.cfg.skill_fluency_coeff,
+                init_logit_scale=self.cfg.init_logit_scale,
+                commit_every=self.cfg.sequential_commit_every,
+                mixed_precision=self.cfg.mixed_precision,
+                show_train_pbar=(self.cfg.verbose >= 3),
+                show_train_logs=(self.cfg.verbose >= 4),
                 device=self.device,
-                verbose=(self.cfg.verbose >= 2),
             )
         raise ValueError(f"Unknown optimization_mode: {mode}")
 
@@ -283,6 +292,8 @@ class TTSODecoding:
             response_text=original_response,
             skill_text=skill_text,
             system_prompt=system_prompt,
+            reward_old=result.original_reward,
+            seed=seed,
         )
         optimized_skill = opt_result["optimized_skill_text"]
         result.optimized_skill = optimized_skill
@@ -415,11 +426,14 @@ class TTSODecoding:
 
             # 4a: Optimize skill given current response
             self._log("Optimizing skill (round %d)...", rnd, level=1)
+            round_seed = (seed + rnd * 1000) if seed is not None else None
             opt_result = self.skill_trainer.optimize(
                 query=query,
                 response_text=current_response,
                 skill_text=current_skill,
                 system_prompt=system_prompt,
+                reward_old=current_reward,
+                seed=round_seed,
             )
             new_skill = opt_result["optimized_skill_text"]
             result.num_llm_calls += opt_result["num_llm_calls"]

@@ -10,7 +10,7 @@
 # Usage:
 #   bash scripts/sweep_hyperparams.sh
 #   bash scripts/sweep_hyperparams.sh cuda:7
-
+# sleep 
 set -euo pipefail
 
 DEVICE="${1:-cuda:6}"

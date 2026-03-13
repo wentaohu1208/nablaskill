@@ -1,7 +1,7 @@
 # Skill Optimization 方法详解
 
 > 结合 Pipeline 完整流程，以 Physics query + Math skill 为例
-> 覆盖两种梯度方法: DTO (Logits) 和 Soft Prompt (Embedding)
+> 覆盖三种梯度方法: DTO (Logits)、Soft Prompt (Embedding)、Sequential DTO (逐 Token)
 
 ---
 
@@ -9,8 +9,9 @@
 
 ```
 用户调用:
-  python scripts/example_physics.py --optimization_mode dto       # 方法一
-  python scripts/example_physics.py --optimization_mode soft_prompt  # 方法二
+  python scripts/example_physics.py --optimization_mode dto             # 方法一
+  python scripts/example_physics.py --optimization_mode soft_prompt     # 方法二
+  python scripts/example_physics.py --optimization_mode sequential_dto  # 方法三
 
 Pipeline 执行:
   TTSOPipeline.run()
@@ -481,110 +482,327 @@ LM embedding space (3584 维)  ≠  RM embedding space (2560 维)
 
 ---
 
-## 6. 两种方法的完整对比
+## 6. 方法三: Sequential DTO (逐 Token 优化)
 
-### 6.1 核心机制对比
+### 6.1 核心思想
 
-| 维度 | DTO (Logits) | Soft Prompt (Embedding) |
-|------|-------------|------------------------|
-| **优化变量** | `skill_logits [1, 180, 152064]` | `skill_embeds [1, 180, 3584]` |
-| **参数量** | 180 × 152064 = **2740万** | 180 × 3584 = **64万** |
-| **初始化** | one-hot × init_scale | `embedding_table[token_ids]` |
-| **forward** | STE: softmax → argmax → embed lookup | 直接用 embedding |
-| **梯度路径** | loss → STE softmax → logits | loss → LM layers → 直达 embeds |
-| **梯度大小** | ~1e-6 (瓶颈) | 预期大几个数量级 |
-| **正则化** | skill_fluency (LM 自回归概率) | embed_drift (L2 距离) |
-| **解码回文本** | `argmax(logits)` | cosine nearest neighbor |
-| **变化方式** | token 离散翻转 (全有或全无) | embedding 连续移动 (渐进) |
-| **RM 处理** | 通过同一个 STE 路径 | 可微分软投影 (cosine → softmax → matmul) |
-
-### 6.2 优化空间对比
+受 Nabla-Reasoner 的逐 token 解码启发：不同时优化所有 skill tokens，
+而是**从左到右逐个 token 优化**，每次 commit 一个后前进到下一个。
 
 ```
-DTO:
-  搜索空间 = 152064^180 种离散组合
-  但每步只能改变 1 个 token (因为梯度太小, 连 1 个都改不了)
-  优化是"翻硬币": 要么不翻, 要么翻到随机位置
-
-Soft Prompt:
-  搜索空间 = R^(180×3584) 连续空间
-  每步所有位置的 embedding 同时微移
-  优化是"拧旋钮": 每个维度都可以精细调整
+优化变量: ahead_logits [1, ahead_len, 152064]
+         ahead_len 每步缩小 (从 180 → 179 → 178 → ... → 1 → 0)
 ```
 
-### 6.3 正则化机制对比
+### 6.2 与 DTO 的关键区别
 
 ```
-DTO - Skill Fluency:
-  衡量方式: LM 给 token 序列的自回归概率 (perplexity)
-  直觉: "这段文本读起来通不通顺?"
-  问题: 和优化目标冲突 — 改变 token 必然降低 fluency
+DTO (全局):
+  优化 [1, 180, 152064] → 所有位置同时变 → 互相干扰 → 乱码
 
-Soft Prompt - Embed Drift:
-  衡量方式: L2(当前 embedding, 初始 embedding)
-  直觉: "每个位置偏移了多远?"
-  优势: 不阻止语义变化, 只限制变化幅度
-         embedding 可以在语义相近的词之间平滑移动
+Sequential DTO:
+  Step 0: 优化 [1, 180, 152064] → commit token 0 → 锁定
+  Step 1: 优化 [1, 179, 152064] → commit token 1 → 锁定
+  Step 2: 优化 [1, 178, 152064] → commit token 2 → 锁定
+  ...
+  Step 179: 优化 [1, 1, 152064] → commit token 179 → 完成
 ```
 
-### 6.4 失败模式对比
+每步只锁定 1 个 token，后续 token 还有机会继续调整。
+
+### 6.3 状态管理: Past (已提交) + Ahead (待优化)
 
 ```
-DTO 的失败模式:
-  1. 梯度消失: init_scale 高 → softmax 接近 one-hot → 梯度 ~1e-6 → 100步无变化
-  2. 乱码输出: init_scale 低/fluency=0 → token 随机翻转 → "Carson İnt-S佳 Skill"
-  3. 缓存死锁: token 不变 → gradient cache 不更新 → 梯度更弱 → 恶性循环
-  ⚠️ 根本原因: STE + vocab_size=152K 的数学限制, 无法通过调参解决
+Step 0 (初始):
+  [prefix] [skill_0..179 (全部 ahead, 待优化)] [suffix+response]
+                      ↑ 全部参与梯度优化
 
-Soft Prompt 的潜在失败模式:
-  1. 投影损失: embedding 优化得很好但投影回 token 后语义丢失
-  2. 真空地带: embedding 飘到离所有真实 token 都很远的区域
-  3. RM 近似误差: 软投影到 RM 空间可能引入噪声
-  ✅ 这些问题可以通过 drift_coeff 调参缓解
+Step 3 (已提交 3 个):
+  [prefix] [s0, s1, s2 (past, frozen)] [s3..179 (ahead, 优化中)] [suffix+response]
+            ↑ 锁定, 不再变          ↑ 仍在优化
+
+Step 100 (已提交 100 个):
+  [prefix] [s0..99 (past, frozen)] [s100..179 (ahead)] [suffix+response]
+            ↑ 100 个已锁定          ↑ 80 个仍在优化
 ```
 
-### 6.5 计算开销对比
+### 6.4 每步的优化过程
+
+```python
+for position in range(180):
+    # 1. 初始化当前 ahead 的 logits (scaled one-hot)
+    ahead_logits = zeros(1, 180-position, vocab_size)
+    ahead_logits[:, :, original_token_ids[position:]] = init_scale
+
+    # 2. 获取 past 的 frozen embeddings
+    past_embeds = embedding_table[committed_ids[:position]]
+
+    # 3. 内层优化循环 (max_iters 步)
+    for it in range(max_iters):
+        # STE: logits → soft one-hot → embedding
+        soft_onehot = STE(ahead_logits)
+        ahead_embeds = soft_onehot @ embedding_table
+
+        # 拼接完整序列并 forward
+        full_embeds = [prefix | past_embeds | ahead_embeds | suffix+response]
+        lm_outputs = lm_model(inputs_embeds=full_embeds)
+
+        # Loss: response NLL + skill fluency (仅 ahead) + RM reward
+        loss = -(nll + fluency + reward)
+        loss.backward()
+        optimizer.step()
+
+    # 4. Commit: argmax 第一个 ahead position
+    committed_token = argmax(ahead_logits[0, 0, :])
+    committed_ids.append(committed_token)
+```
+
+### 6.5 Rollout Through Response
+
+每步 forward pass 都**穿过完整 response** 计算 loss:
 
 ```
-DTO:
-  每步 forward: LM forward (embedding 通过 STE 计算)
-  每步 backward: 梯度传到 [1, 180, 152064] 的 logits
-  显存: skill_logits + grad = 2 × 180 × 152064 × 4B ≈ 220MB
-
-Soft Prompt:
-  每步 forward: LM forward (直接传 embedding)
-  每步 backward: 梯度传到 [1, 180, 3584] 的 embedding
-  显存: skill_embeds + grad = 2 × 180 × 3584 × 4B ≈ 5MB
-  额外: RM 软投影需要计算 [180, 152064] 的相似度矩阵 (临时)
+                 梯度流方向 ←──────────────────────────────────
+                                                              |
+[prefix] [past] [ahead_logits → STE → embeds] [suffix+response] → LM forward → logits
+                                                                                  |
+                                                               → pred response tokens → NLL loss
+                                                               → RM forward → reward
 ```
 
-### 6.6 一句话总结
+Response 不是优化变量，但**参与 loss 计算**。与 Nabla-Reasoner 一致：
+- Nabla: 优化 response tokens, rollout 到序列末尾
+- Sequential DTO: 优化 skill tokens, rollout 经过 response 计算 loss
+
+### 6.6 Fluency 只约束 Ahead Tokens
 
 ```
-DTO:  在 152064 维离散空间里找最优 token 组合 — 搜索空间太大, 梯度太小, 走不动
-Soft: 在 3584 维连续空间里微调 embedding — 搜索空间合理, 梯度充足, 再投影回 token
+Step 50:
+  [prefix] [s0..49 (past)] [s50..179 (ahead)] [suffix]
+                             ↑ 只对这部分算 fluency
+
+为什么?
+  - past tokens 已经 commit, 值不会再变, 算 fluency 梯度传不回去
+  - ahead tokens 正在被优化, 需要 fluency 防止变乱码
+
+fluency 计算:
+  ahead_start = prefix_len + num_past
+  pred_logits = all_logits[:, ahead_start-1 : ahead_start+ahead_len-1, :]
+  fluency = (log_softmax(pred_logits) * soft_onehot.detach()).sum()
+```
+
+### 6.7 Commit 策略 + Per-Token Rejection Sampling
+
+```
+commit_every = 1 (默认):
+  每次只锁定 1 个 token → 最精细, 180 个 position × max_iters 步
+  总计算量: 180 × 20 = 3600 步 (vs 全局 DTO 的 20 步)
+
+commit_every = 5:
+  每次锁定 5 个 token → 36 个 position × max_iters 步
+  总计算量: 36 × 20 = 720 步
+
+commit_every = 180:
+  一次锁定全部 → 退化为全局 DTO
+```
+
+**Trajectory-Based Rejection Sampling** (参考 Nabla-Reasoner 的 `acceptance_criteria`):
+
+优化完成后，不直接 commit 优化后的 token，而是通过完整 trajectory 比较后再决定。
+维护动态 `reward_old` baseline，每次 accept 后提升门槛。
+
+**流程 (trajectory-based, 唯一模式)**:
+```python
+# reward_old 初始化为原始 trajectory 的 RM score
+
+for each token to commit:
+    opt_token = argmax(ahead_logits[position])
+    orig_token = original_skill_ids[position]
+
+    if opt_token == orig_token:
+        commit(opt_token)       # 没变, 直接提交 (零成本)
+    else:
+        # 1. 构建完整 new skill: past + opt_token + remaining ahead argmax
+        new_skill = decode(past_ids + [opt_token] + argmax(ahead_logits[1:]))
+        # 2. 用 new skill 生成完整 response
+        new_response = generate(query, new_skill)
+        # 3. RM 评分
+        reward_new = RM(query + new_skill, new_response)
+        # 4. 与 reward_old 比较
+        if reward_new > reward_old:
+            commit(opt_token)
+            reward_old = reward_new  # 动态提升门槛
+        else:
+            commit(orig_token)       # 保留原始
+```
+
+**为什么不比较 loss (NLL + fluency)?**
+- ahead tokens 在旧 context 下优化，fluency 天然偏向旧 token → 不公平
+- RM reward 通过完整 trajectory 评估，不受 ahead context 偏差影响
+
+**动态 reward_old**:
+- 每次 accept 后 reward_old 更新为 reward_new
+- 门槛越来越高，防止后续 token 退化
+- reject 时 reward_old 不变
+
+**MPC 重初始化**:
+- 无论 accept 还是 reject，下一步都从 original tokens 重初始化 ahead logits
+- 因为 committed token 可能已变 (accept 情况)，旧 ahead 优化结果不可靠
+
+**效果**:
+- 保证 skill 质量单调不降: 每个 token 变化都经过验证
+- 防止 STE 梯度噪声导致的退化 (优化方向错误但 argmax 翻转了)
+- 额外成本: reward 模式 +2 RM calls/changed token; loss 模式 +2 LM+RM calls
+- 统计 accepted/rejected 比例用于诊断优化质量
+
+### 6.8 为什么可能比全局 DTO 更好
+
+```
+全局 DTO 的问题:
+  同时优化 180 × 152064 = 2740万参数
+  → 梯度分散到所有位置 → 每个位置的更新极小
+  → 一个位置变了可能让其他位置变差 → 互相干扰
+
+Sequential DTO 的优势:
+  每步 ahead 从 180 → 179 → ... → 1 逐步缩小
+  → 后面的位置搜索空间更小
+  → 已 commit 的 past tokens 提供了稳定的上下文
+  → 类似 MPC (Model Predictive Control): 规划整体, 只提交一步
+
+潜在问题:
+  - 总计算量 ≈ N × max_iters (远大于全局 DTO 的 max_iters)
+  - 早期 commit 的错误无法纠正 (greedy, 非全局最优)
+  - STE 梯度瓶颈依然存在 (只是搜索空间变小了)
 ```
 
 ---
 
-## 7. 关键代码位置
+## 7. 三种方法的完整对比
+
+### 7.1 核心机制对比
+
+| 维度 | DTO (全局 Logits) | Soft Prompt (Embedding) | Sequential DTO (逐 Token) |
+|------|------------------|------------------------|--------------------------|
+| **优化变量** | `logits [1, 180, 152064]` | `embeds [1, 180, 3584]` | `ahead_logits [1, ahead, 152064]` |
+| **参数量** | 180 × 152064 = **2740万** | 180 × 3584 = **64万** | ahead × 152064 (逐步缩小) |
+| **初始化** | one-hot × init_scale | `embed_table[token_ids]` | one-hot × init_scale (每步重新) |
+| **forward** | STE: softmax → argmax → embed | 直接用 embedding | STE (同 DTO) |
+| **梯度路径** | loss → STE softmax → logits | loss → 直达 embeds | loss → STE → ahead logits |
+| **梯度大小** | ~1e-6 (瓶颈) | 预期大几个数量级 | ~1e-6 (STE 瓶颈依然) |
+| **正则化** | skill_fluency (全部) | embed_drift (L2) | skill_fluency (仅 ahead) |
+| **解码** | `argmax(logits)` | cosine nearest neighbor | `argmax` 逐个 commit |
+| **Rejection** | 无 (全局 argmax) | 无 | trajectory-based rejection (generate+RM) |
+| **RM 处理** | STE 路径 | 可微分软投影 | STE + past frozen embeds |
+
+### 7.2 优化空间对比
+
+```
+DTO:
+  搜索空间 = 152064^180 种离散组合, 一次性全搜
+  优化是"同时翻 180 个硬币"
+
+Sequential DTO:
+  每步搜索空间 = 152064^ahead (从 152064^180 逐步缩小到 152064^1)
+  优化是"逐个翻硬币, 翻完锁定, 后续基于已锁定的上下文调整"
+  类似 MPC: 规划全局, 提交一步
+
+Soft Prompt:
+  搜索空间 = R^(180×3584) 连续空间
+  优化是"拧旋钮": 每个维度精细调整
+```
+
+### 7.3 正则化机制对比
+
+```
+DTO - Skill Fluency (全部 token):
+  "这段完整 skill 文本通不通顺?"
+  问题: 改变 token 必然降低 fluency
+
+Sequential DTO - Skill Fluency (仅 ahead):
+  "还没 commit 的 ahead tokens 通不通顺?"
+  past tokens 已锁定, 不需要约束 → 约束范围逐步缩小
+
+Soft Prompt - Embed Drift:
+  "每个位置的 embedding 偏移了多远?"
+  不阻止语义变化, 只限制变化幅度
+```
+
+### 7.4 失败模式对比
+
+```
+DTO 的失败模式:
+  1. 梯度消失: init_scale 高 → softmax 接近 one-hot → 梯度 ~1e-6
+  2. 乱码输出: init_scale 低 → token 随机翻转 → "Carson İnt-S佳 Skill"
+  ⚠️ 根本原因: STE + vocab=152K, 无法调参解决
+
+Sequential DTO 的潜在失败模式:
+  1. STE 瓶颈依然: 每步的梯度仍然很小 (vocab 没变)
+  2. Greedy 误差: 早期 commit 的错误无法纠正, 错误累积
+  3. 计算成本高: N × max_iters 步 (vs 全局 DTO 的 max_iters 步)
+  ❓ 潜在优势: 搜索空间逐步缩小, past 提供稳定上下文
+
+Soft Prompt 的潜在失败模式:
+  1. 投影损失: embedding 优化好但投影回 token 后语义丢失
+  2. 真空地带: embedding 飘到离所有 token 都远的区域
+  ✅ 可通过 drift_coeff 调参缓解
+```
+
+### 7.5 计算开销对比
+
+```
+DTO (全局):
+  总步数: max_iters (如 20)
+  每步显存: [1, 180, 152064] × 4B × 2 ≈ 220MB
+  总 LM forward: 20 次
+
+Sequential DTO:
+  总步数: num_tokens × max_iters (如 180 × 20 = 3600)
+  每步显存: [1, ahead, 152064] (ahead 逐步缩小, 平均 ≈ 110MB)
+  总 LM forward: 3600 次 (180× 于全局 DTO!)
+
+Soft Prompt:
+  总步数: max_iters (如 20)
+  每步显存: [1, 180, 3584] × 4B × 2 ≈ 5MB
+  总 LM forward: 20 次
+```
+
+### 7.6 一句话总结
+
+```
+DTO:         同时优化所有 token — 搜索空间太大, 梯度太小, 走不动
+Sequential:  逐个 token 优化并锁定 — 搜索空间渐缩, 但 STE 瓶颈仍在, 计算量大
+Soft Prompt: 连续 embedding 空间微调 — 梯度充足, 搜索空间合理, 再投影回 token
+```
+
+---
+
+## 8. 关键代码位置
 
 | 组件 | 文件 | 关键函数 |
 |------|------|---------|
-| **DTO** | | |
+| **DTO (全局)** | | |
 | Logits 模块 | `src/skill_embedder.py` | `DiffSkillLogitsToEmbedding` |
 | STE forward | `src/skill_embedder.py` | `forward()` |
-| 解码 argmax | `src/skill_embedder.py` | `project_to_token_ids()` |
-| Fluency 正则 | `src/skill_trainer.py` | `optimize()` 内 |
+| 解码 argmax | `src/skill_embedder.py` | `decode_text()` |
+| Fluency 正则 | `src/skill_trainer.py` | `compute_loss()` |
 | DTO 优化主循环 | `src/skill_trainer.py` | `optimize()` |
 | **Soft Prompt** | | |
-| Soft embedding 模块 | `src/soft_prompt_trainer.py:28` | `SoftPromptEmbedding` |
-| 初始化 | `src/soft_prompt_trainer.py:70` | `initialize(skill_token_ids)` |
-| Forward (含 RM 投影) | `src/soft_prompt_trainer.py:91` | `forward()` |
-| 投影回 tokens | `src/soft_prompt_trainer.py:117` | `project_to_token_ids()` |
-| Drift 正则 | `src/soft_prompt_trainer.py:140` | `drift_loss()` |
-| Soft 优化主循环 | `src/soft_prompt_trainer.py:218` | `optimize()` |
+| Soft embedding 模块 | `src/soft_prompt_trainer.py` | `SoftPromptEmbedding` |
+| 初始化 | `src/soft_prompt_trainer.py` | `initialize()` |
+| Forward (含 RM 投影) | `src/soft_prompt_trainer.py` | `forward()` |
+| 投影回 tokens | `src/soft_prompt_trainer.py` | `project_to_token_ids()` |
+| Drift 正则 | `src/soft_prompt_trainer.py` | `drift_loss()` |
+| Soft 优化主循环 | `src/soft_prompt_trainer.py` | `optimize()` |
+| **Sequential DTO** | | |
+| 状态管理 | `src/sequential_trainer.py` | `SequentialSkillStates` |
+| Past/Ahead 分离 | `src/sequential_trainer.py` | `get_past_embeds()`, `init_ahead_logits()` |
+| Commit 机制 | `src/sequential_trainer.py` | `commit()`, `commit_token_ids()` |
+| Rejection Sampling | `src/sequential_trainer.py` | `_evaluate_trajectory_reward()` |
+| 全序列拼接 (LM) | `src/sequential_trainer.py` | `_build_full_embeds()` |
+| 全序列拼接 (RM) | `src/sequential_trainer.py` | `_build_rm_full_embeds()` |
+| 单位置优化 | `src/sequential_trainer.py` | `_optimize_position()` |
+| 逐 token 主循环 | `src/sequential_trainer.py` | `optimize()` |
 | **共用** | | |
-| Factory 路由 | `src/ttso.py:141` | `_create_optimizer()` |
-| 模板拼接 | `src/skill_template.py:142` | `SkillGenerationTemplate.apply()` |
+| Factory 路由 | `src/ttso.py` | `_create_optimizer()` |
+| 模板拼接 | `src/skill_template.py` | `SkillGenerationTemplate.apply()` |
 | Outer loop | `src/ttso.py` | `run_iterative()` |

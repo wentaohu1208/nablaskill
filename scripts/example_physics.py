@@ -143,7 +143,7 @@ def main() -> None:
     parser.add_argument("--device", type=str, default='cuda:6')
     parser.add_argument("--fp32", action="store_true", help="Use float32")
     parser.add_argument("--optimization_mode", type=str, default="soft_prompt",
-                        choices=["dto", "soft_prompt", "textgrad"],
+                        choices=["dto", "soft_prompt", "sequential_dto"],
                         help="Skill optimization method")
     parser.add_argument("--max_iters", type=int, default=20,
                         help="DTO/soft_prompt gradient steps per outer round")
@@ -162,8 +162,8 @@ def main() -> None:
                         help="Soft prompt: softmax temperature for RM projection")
     parser.add_argument("--init_logit_scale", type=float, default=3.0,
                         help="DTO: initial one-hot logit scale")
-    parser.add_argument("--textgrad_max_rewrites", type=int, default=5,
-                        help="TextGrad: max rewrite iterations")
+    parser.add_argument("--sequential_commit_every", type=int, default=1,
+                        help="Sequential DTO: commit N tokens per step")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--query", type=str, default=None)
     parser.add_argument("--skill", type=str, default=None)
@@ -197,7 +197,7 @@ def main() -> None:
         embed_drift_coeff=args.embed_drift_coeff,
         rm_projection_temperature=args.rm_projection_temperature,
         init_logit_scale=args.init_logit_scale,
-        textgrad_max_rewrites=args.textgrad_max_rewrites,
+        sequential_commit_every=args.sequential_commit_every,
         rejection_sampling=(rm_model is not None),
         verbose=args.verbose,
     )
