@@ -81,6 +81,30 @@ Solve mathematical problems systematically using algebraic reasoning and logical
 """
 
 
+ENGLISH_SKILL = """\
+# English Reading Comprehension Skill
+
+## Goal
+Answer reading comprehension questions by extracting and reasoning over information from a given passage.
+
+## Workflow
+1. **Read the passage carefully**: Identify the main topic, key entities, \
+and the overall argument or narrative.
+2. **Understand the question**: Determine what type of answer is expected \
+(factual recall, inference, vocabulary, or author intent).
+3. **Locate relevant evidence**: Find specific sentences or phrases in the \
+passage that relate to the question.
+4. **Reason over evidence**: For inference questions, combine multiple pieces \
+of evidence and apply logical reasoning. For factual questions, extract the \
+answer directly.
+5. **Eliminate distractors**: If options are given, rule out choices that \
+contradict the passage or are unsupported.
+6. **Formulate the answer**: State the answer clearly, citing or paraphrasing \
+the supporting evidence from the passage.
+7. **Verify consistency**: Re-read the relevant part of the passage to confirm \
+the answer does not misrepresent the original text.\
+"""
+
 PHYSICS_QUERY = (
     "A 2 kg block slides down a frictionless inclined plane that makes "
     "a 30-degree angle with the horizontal. What is the acceleration "
@@ -219,7 +243,7 @@ def main() -> None:
     # Run optimization
     query = args.query or PHYSICS_QUERY
     # skill = args.skill or PHYSICS_SKILL
-    skill = args.skill or MATH_SKILL
+    skill = args.skill or ENGLISH_SKILL
     
 
     logger.info("=" * 60)
