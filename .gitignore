@@ -1,1 +1,2 @@
-/outputs
+outputs/
+.pycache_tmp/
